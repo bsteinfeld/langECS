@@ -1,0 +1,39 @@
+{
+  "name": "@langecs/langchain",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LangChain.js model adapter for LangECS — use any LangChain chat model as a LangECS Model",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langecs/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3"
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.1.48"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  }
+}

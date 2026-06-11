@@ -1,0 +1,40 @@
+{
+  "name": "@langecs/ai-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Vercel AI SDK model adapter for LangECS — every provider via one dependency",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langecs/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "ai": ">=5"
+  },
+  "devDependencies": {
+    "@ai-sdk/openai": "^3.0.69",
+    "ai": "^6.0.199"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  }
+}

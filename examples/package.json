@@ -1,0 +1,29 @@
+{
+  "name": "langecs-examples",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "react-agent": "tsx react-agent/main.ts",
+    "sql-agent": "tsx sql-agent/main.ts",
+    "supervisor": "tsx supervisor/main.ts",
+    "reflection": "tsx reflection/main.ts",
+    "human-in-the-loop": "tsx human-in-the-loop/main.ts",
+    "time-travel": "tsx time-travel/main.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.69",
+    "@langecs/ai-sdk": "workspace:*",
+    "@langecs/core": "workspace:*",
+    "@langecs/persist-fs": "workspace:*",
+    "@langecs/stdlib": "workspace:*",
+    "ai": "^6.0.199"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}
