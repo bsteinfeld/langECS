@@ -51,6 +51,10 @@ export {
   type ToolSpec,
 } from './model';
 export { MemoryAdapter, type PersistenceAdapter } from './persistence';
+// Typed resource references (R18 amended): replace stringly-typed hops like
+// `ctx.resource<Model>('model:main')` with
+// `const MainModel = defineResource<Model>('model:main')` + `ctx.resource(MainModel)`.
+export { defineResource, type ResourceRef } from './resource';
 export type { PendingPair, Snapshot, SnapshotEntity } from './snapshot';
 export {
   type ComponentValue,

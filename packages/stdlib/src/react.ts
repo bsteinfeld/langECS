@@ -2,7 +2,13 @@
 // a spawnable AgentDef. Underneath it is plain ECS — auto-tag scoping (R34),
 // dirty-triggered LLM↔tools cycle, approval interrupts, optional retry.
 
-import { type AgentDef, type ComponentInit, defineAgent } from '@langecs/core';
+import {
+  type AgentDef,
+  type ComponentInit,
+  defineAgent,
+  type Model,
+  type ResourceRef,
+} from '@langecs/core';
 import {
   Messages,
   ModelRef,
@@ -17,12 +23,18 @@ import type { ToolDef } from './tools';
 export interface ReactAgentOptions {
   /** Agent name; becomes the auto-tag `agent:<name>` (globally unique). */
   name: string;
-  /** Resource name the `Model` is registered under (e.g. `'model:main'`). */
-  model: string;
+  /**
+   * The `Model` resource: a typed ref from `defineResource<Model>(...)` or the
+   * plain resource name (e.g. `'model:main'`). Either way only the name is
+   * stored (in the `ModelRef` component) — components hold data, not clients.
+   */
+  model: string | ResourceRef<Model>;
   /**
    * Tool names or ToolDefs. Only names land in the `Tools` component; ToolDef
    * implementations must still be registered on the world via
    * `registerTools(world, tools)` (components hold data, resources hold behavior).
+   * Unlike `model`, tools stay string-named (no `ResourceRef`): the names double
+   * as data in the `Tools` component and as what the model sees in tool specs.
    */
   tools?: (string | ToolDef)[];
   systemPrompt?: string;
@@ -37,7 +49,8 @@ export interface ReactAgentOptions {
  */
 export function reactAgent(opts: ReactAgentOptions): AgentDef {
   const toolNames = (opts.tools ?? []).map((tool) => (typeof tool === 'string' ? tool : tool.name));
-  const components: ComponentInit<any>[] = [Messages([]), ModelRef(opts.model), Tools(toolNames)];
+  const modelName = typeof opts.model === 'string' ? opts.model : opts.model.resourceName;
+  const components: ComponentInit<any>[] = [Messages([]), ModelRef(modelName), Tools(toolNames)];
   if (opts.systemPrompt !== undefined) components.push(SystemPrompt(opts.systemPrompt));
   if (opts.retry !== undefined) components.push(RetryPolicy(opts.retry));
   return defineAgent({

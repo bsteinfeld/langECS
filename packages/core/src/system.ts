@@ -2,6 +2,7 @@ import type { AgentDef } from './agent';
 import type { ComponentInit, ComponentType, QueryTerm, TagType } from './component';
 import { isComponentType } from './component';
 import { LangECSError } from './errors';
+import type { ResourceRef } from './resource';
 
 /** Value type carried by a component type. */
 export type ComponentValue<C> = C extends ComponentType<infer T> ? T : never;
@@ -95,6 +96,13 @@ export interface SystemCtx {
   remove(target: EntityTarget, component: ComponentType<any>): void;
   /** Pushes a `custom` event to the live run stream immediately, mid-step (R23). */
   emit(data: unknown): void;
+  /**
+   * Typed resource lookup via a `ResourceRef` (R18 amended): `T` comes from
+   * the ref, no manual generic. Throws `MissingResourceError` (naming the
+   * resource) when nothing is registered under the ref's name.
+   */
+  resource<T>(ref: ResourceRef<T>): T;
+  /** String-keyed resource lookup (R18); same slot as the ref form. */
   resource<T>(name: string): T;
   /** Manually marks (system, entity) — or all systems for the entity — dirty (R24). */
   invalidate(target: EntityTarget, system?: string): void;

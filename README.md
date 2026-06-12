@@ -4,7 +4,7 @@
 
 Agents are entities. All agent state — message history, pending tool calls, errors, interrupts — is components (pure JSON data). Logic is systems: queries over components plus an async handler. There are no edges and no router; a system fires when another system's writes dirty the components its query watches, and a run ends when nothing fires (quiescence). One sentence of positioning: **LangGraph is Pregel over a closed graph; LangECS is Pregel over an open world.**
 
-> **Status: v0.1, an experiment — verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side and judging honestly (each [example README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable, packages are not on npm, and the name `langecs` is provisional — a rename is planned before any release ([docs/naming.md](docs/naming.md)).
+> **Status: v0.1, an experiment — verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side and judging honestly (each port's [README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable, packages are not on npm, and the name `langecs` is provisional — a rename is planned before any release ([docs/naming.md](docs/naming.md)).
 
 "Agents as ECS entities" is not a new idea — [ArgOS](https://github.com/project-89/argOS) and DeepMind's [Simulation Streams](https://arxiv.org/abs/2501.18668) got there first, on the simulation side. What LangECS adds is the runtime:
 
@@ -34,7 +34,7 @@ Not on npm yet — run inside the repo:
 git clone <this repo> langecs && cd langecs
 corepack enable && pnpm install             # Node >= 20, pnpm 11
 echo 'OPENAI_API_KEY=sk-...' >> .env.local  # repo root, gitignored
-pnpm -C examples react-agent                # the full version of the code below
+pnpm -C examples react-agent                # the agent below, plus token streaming
 pnpm test                                   # entire suite: deterministic, zero network —
                                             # unless OPENAI_API_KEY is set, which opts in
                                             # one real ai-sdk integration test
@@ -45,8 +45,11 @@ A complete ReAct agent (adapted from [`examples/react-agent`](examples/react-age
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { fromAiSdk } from '@langecs/ai-sdk';
-import { createWorld } from '@langecs/core';
-import { defineTool, lastAssistant, reactAgent, registerTools, sendMessage } from '@langecs/stdlib';
+import { createWorld, defineResource, type Model } from '@langecs/core';
+import { ask, defineTool, reactAgent, registerTools } from '@langecs/stdlib';
+
+// A typed resource name: the world slot a Model client registers under.
+const Gpt = defineResource<Model>('model:main');
 
 // A tool is data a system reads; its implementation registers on the world by name.
 const weather = defineTool({
@@ -64,31 +67,31 @@ const weather = defineTool({
 // An agent is a spawnable bundle of components + query-scoped systems.
 const assistant = reactAgent({
   name: 'assistant',
-  model: 'model:main', // a resource name — components hold data, never clients
+  model: Gpt, // just a typed resource name — components hold data, never clients
   tools: [weather],
   systemPrompt: 'You are a helpful assistant.',
 });
 
 const world = createWorld();
-world.register('model:main', fromAiSdk(openai('gpt-4o-mini')));
+world.register(Gpt, fromAiSdk(openai('gpt-4o-mini')));
 registerTools(world, [weather]);
 const agent = world.spawn(assistant);
 
-// Drive to quiescence. The LLM→tools→LLM loop has no edges: callLLM's reply with
-// tool calls dirties PendingToolCalls (wakes executeTools); the tool result
-// appended to Messages is foreign dirt that wakes callLLM again; a reply without
-// tool calls removes MessageWaiting and the world goes quiescent.
-const run = sendMessage(world, agent, "What's the weather in San Francisco?");
-for await (const event of run) {
-  if (event.type === 'step:start')
-    console.log(`step ${event.step}: ${event.scheduled.map((p) => p.system).join(', ')}`);
-  // event.type === 'custom' carries live model tokens (ctx.emit), mid-step
-}
-console.log((await run).status); // 'done'
-console.log(lastAssistant(world, agent)?.content);
+// One awaited Q&A turn, driven to quiescence. The LLM→tools→LLM loop has no
+// edges: callLLM's reply with tool calls dirties PendingToolCalls (wakes
+// executeTools); the tool result appended to Messages is foreign dirt that
+// wakes callLLM again; a reply without tool calls removes MessageWaiting and
+// the world goes quiescent — which is when ask() returns the reply text.
+console.log(await ask(world, agent, "What's the weather in San Francisco?"));
 ```
 
-Swap `fromAiSdk(openai(...))` for any AI SDK provider, or `fromLangChain(chatModel)` from [`@langecs/langchain`](packages/langchain) — the model is one registry entry. Tests replace it with `scriptedModel` from core and assert the exact step choreography with zero network.
+Swap `fromAiSdk(openai(...))` for any AI SDK provider, or `fromLangChain(chatModel)` from [`@langecs/langchain`](packages/langchain) — the model is one registry entry. Tests replace it with `scriptedModel` from core and assert the exact step choreography with zero network. Want live tokens and step events instead of one awaited answer? `sendMessage(world, agent, text)` returns a `Run` that is both awaitable and an `AsyncIterable<RunEvent>` — [`examples/supervisor`](examples/supervisor/README.md) is the full event-stream demo.
+
+Three helpers carry most of the examples, all one-liners:
+
+- `defineResource<Model>('model:main')` — a typed resource name: `world.register(ref, client)` and `ctx.resource(ref)` type-check instead of being stringly-typed.
+- `ask(world, agent, text)` — one fully-automatic turn: send, run to quiescence, return the reply text (any non-`'done'` outcome throws a self-explaining error).
+- `extractJson<T>(model, { prompt, schema })` — strict-JSON structured output from any `Model`, with markdown-fence stripping and one parse-failure retry built in.
 
 ## What you get for being state-first
 
@@ -174,18 +177,42 @@ And when something *doesn't* fire, the built-in flight recorder answers why: eve
 
 ## Examples
 
-The six LangGraph.js ports that gate this experiment. Each README ends with an honest side-by-side comparison against the original — what's better, what's worse.
+Thirteen runnable examples form a learning path — [examples/README.md](examples/README.md) is the full index. Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY` — except order-pipeline, which makes zero model calls) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network. Every `main.ts` outside the ports is await-and-read-state — no event handling required; streaming is opt-in ([supervisor](examples/supervisor/README.md) is the full event-stream demo).
 
-| Example | LangGraph.js original | What it exercises |
+**Start here**
+
+| Example | What it teaches |
+|---|---|
+| [hello-world](examples/hello-world/README.md) | A chat agent from raw parts — one component, one tag, one system; quiescence ends the run |
+| [order-pipeline](examples/order-pipeline/README.md) | A no-LLM workflow engine — stage components, free per-order concurrency, retry-after-failure |
+| [tools-from-scratch](examples/tools-from-scratch/README.md) | The tool loop demystified — `think` ↔ `act` by hand, no loop construct, then the `reactAgent` preset |
+
+**Real-world workflows**
+
+| Example | What it teaches |
+|---|---|
+| [support-desk](examples/support-desk/README.md) | Entities as work items: concurrent triage, `when`-guard routing, per-ticket human escalation |
+| [content-pipeline](examples/content-pipeline/README.md) | A staged pipeline with no orchestrator: `ctx.spawn` fan-out, reducer fan-in, count-guard readiness |
+| [code-review-crew](examples/code-review-crew/README.md) | Three reviewers, one step: same-query fan-out, the step barrier as the join, a lead verdict |
+
+**Multi-agent**
+
+| Example | What it teaches |
+|---|---|
+| [research-team](examples/research-team/README.md) | Runtime agent spawning onto a shared blackboard, a bounded critic cycle, a global token budget |
+| [supervisor](examples/supervisor/README.md) | Parallel worker fan-out, `Inbox` fan-in, mid-run spawning, crash → heal (also a LangGraph port) |
+| [reflection](examples/reflection/README.md) | Writer↔critic alternation from self-write exclusion; termination by removing a tag (also a port) |
+
+**LangGraph ports + verdicts** — the six side-by-side ports that gated the experiment; each README ends with an honest comparison ([examples/README.md](examples/README.md#langgraph-ports--verdicts) condenses all six verdicts):
+
+| Example | LangGraph.js original | Verdict in one phrase |
 |---|---|---|
-| [react-agent](examples/react-agent/README.md) | [quickstart](https://github.com/langchain-ai/langgraphjs/tree/main/examples/quickstart) | The edgeless LLM↔tools cycle, `reactAgent` preset, token streaming |
-| [sql-agent](examples/sql-agent/README.md) | [sql-agent](https://github.com/langchain-ai/langgraphjs/tree/main/examples/sql-agent) | English→SQL over `node:sqlite` (Node ≥ 22.5), tool/model registries |
-| [supervisor](examples/supervisor/README.md) | [agent_supervisor.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/multi_agent/agent_supervisor.ipynb) | Parallel workers in one step, runtime agent spawning, `SystemError` healing |
-| [reflection](examples/reflection/README.md) | [reflection](https://github.com/langchain-ai/langgraphjs/tree/main/examples/reflection) | Writer↔critic cycle with no router; termination by component removal |
-| [human-in-the-loop](examples/human-in-the-loop/README.md) | [review-tool-calls.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/review-tool-calls.ipynb), [react-human-in-the-loop.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/react-human-in-the-loop.ipynb) | Tool approval, `'pending'` quiescence, kill-and-resume across processes |
-| [time-travel](examples/time-travel/README.md) | [time-travel.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/time-travel.ipynb) | Checkpoint history, rewind to step N, fork timelines |
-
-Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY`) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network.
+| [react-agent](examples/react-agent/README.md) | [quickstart](https://github.com/langchain-ai/langgraphjs/tree/main/examples/quickstart) | Par, with different strengths |
+| [sql-agent](examples/sql-agent/README.md) | [sql-agent](https://github.com/langchain-ai/langgraphjs/tree/main/examples/sql-agent) | Roughly par, with opposite strengths |
+| [supervisor](examples/supervisor/README.md) | [agent_supervisor.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/multi_agent/agent_supervisor.ipynb) | Better at the mechanics this pattern is about |
+| [reflection](examples/reflection/README.md) | [reflection](https://github.com/langchain-ai/langgraphjs/tree/main/examples/reflection) | Better runtime semantics; worse immediate legibility |
+| [human-in-the-loop](examples/human-in-the-loop/README.md) | [review-tool-calls.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/review-tool-calls.ipynb), [react-human-in-the-loop.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/react-human-in-the-loop.ipynb) | Genuinely nicer for tool approval specifically |
+| [time-travel](examples/time-travel/README.md) | [time-travel.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/time-travel.ipynb) | Par overall |
 
 ## Docs
 

@@ -1,26 +1,30 @@
 # Examples
 
-Six ports of canonical LangGraph.js examples, rebuilt on LangECS. They are the
-acceptance gate for the v1 experiment ("is ECS a good organizing structure for LLM
-agents?"), so each directory's README contains a deliberately honest side-by-side
-comparison with the original — including where the original wins. If you're coming
-from LangGraph.js, read [the concept map](../docs/langgraph-comparison.md) first.
+Thirteen runnable examples, organized as a learning path: three minimal
+starters, three real-world workflows, three multi-agent patterns, and the six
+LangGraph.js ports that gated the v1 experiment — each port's README contains a
+deliberately honest side-by-side comparison with the original, including where
+the original wins. If you're coming from LangGraph.js, read
+[the concept map](../docs/langgraph-comparison.md) first.
 
 Each example has the same shape:
 
-- `agent.ts` — components/systems/agent definition, shared by demo and test
-- `main.ts` — live demo against OpenAI `gpt-4o-mini` (via `@langecs/ai-sdk`)
+- a definition module (`agent.ts`, `pipeline.ts`, `crew.ts`, …) —
+  components/systems/agent bundles shared by demo and test (hello-world is so
+  small that `main.ts` is the whole program)
+- `main.ts` — live demo against OpenAI `gpt-4o-mini` (via `@langecs/ai-sdk`);
+  order-pipeline is the exception with zero model calls
 - `*.test.ts` — deterministic choreography test using core's `scriptedModel`:
   zero network, no API key, asserts the exact step-by-step schedule from the
   flight recorder (`world.getTrace()`)
-- `README.md` — how it works + the honest comparison
+- `README.md` — what it teaches; for the ports, also the honest comparison
 
 ## Running them
 
 ```sh
 pnpm install                                # repo root, once
 echo 'OPENAI_API_KEY=sk-...' >> .env.local  # repo root, gitignored
-pnpm -C examples <name>                     # live demo (any name from the table below)
+pnpm -C examples <name>                     # live demo (any name from the tables below)
 ```
 
 The `main.ts` demos read `OPENAI_API_KEY` from the repo-root `.env.local`
@@ -30,7 +34,7 @@ vars take precedence).
 The tests need **no key and no network** — every model turn is scripted:
 
 ```sh
-pnpm -C examples test                          # all six
+pnpm -C examples test                          # all thirteen
 pnpm -C examples exec vitest run react-agent   # one example
 ```
 
@@ -38,93 +42,96 @@ Node ≥ 20 works for everything except **sql-agent**, which uses `node:sqlite`
 and needs **Node ≥ 22.5** (add `--experimental-sqlite` below 23.4; this repo
 targets Node 24, where it just works modulo an `ExperimentalWarning`).
 
-## Index
+**No event handling required.** Every new example's `main.ts` is
+await-and-read-state: `await world.run()` (or `ask`/`sendMessage`), then read
+components straight off the entities. Streaming is opt-in — the run is also an
+`AsyncIterable<RunEvent>`; see [supervisor](supervisor/) for the full
+event-stream demo (live tokens, step logging, error events).
+
+## Start here
+
+| Example | One teaching sentence | Run |
+|---|---|---|
+| [hello-world](hello-world/) | A chat agent from raw parts — one component, one tag, one system; the reply appends, the tag is removed, quiescence ends the run, and conversation memory is just state that never went anywhere | `pnpm -C examples hello-world` |
+| [order-pipeline](order-pipeline/) | A no-LLM workflow engine — five orders flow through stage components concurrently, one fails and is healed by the stdlib `retry` system while the others keep advancing in the same steps | `pnpm -C examples order-pipeline` |
+| [tools-from-scratch](tools-from-scratch/) | The tool loop demystified — `think` ↔ `act` built by hand with no loop construct, so `reactAgent` stops being magic (self-writes never retrigger; a foreign append is the return edge) | `pnpm -C examples tools-from-scratch` |
+
+## Real-world workflows
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| [support-desk](support-desk/) | Entities as work items, systems as workers: four tickets triaged in one concurrent step, routed by `when` guards, with per-ticket `AwaitingHuman` escalation that blocks nobody else; `extractJson` for typed triage | `pnpm -C examples support-desk` |
+| [content-pipeline](content-pipeline/) | A staged blog-post pipeline with no orchestrator or edges: `ctx.spawn` fan-out to one `Section` entity per heading, all drafted in a single step, fan-in via an append reducer and a count guard | `pnpm -C examples content-pipeline` |
+| [code-review-crew](code-review-crew/) | Three reviewer systems share one query, so a single send fans out to three parallel model calls; the step barrier is the join — `Findings` can't be deduped until every reviewer's append commits | `pnpm -C examples code-review-crew` |
+
+## Multi-agent
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| [research-team](research-team/) | A planner spawns one researcher *agent* per sub-question at runtime; researchers fill a shared blackboard in parallel, a critic drives one bounded revision cycle, and a global token-budget watchdog quiesces the team gracefully with partial results | `pnpm -C examples research-team` |
+| [supervisor](supervisor/) | Parallel worker fan-out in one step, deterministic `Inbox` fan-in via reducer, mid-run agent spawning, crash → `SystemError` → heal — also the full run event-stream demo (a LangGraph port; verdict below) | `pnpm -C examples supervisor` |
+| [reflection](reflection/) | Writer ↔ critic alternation from self-write exclusion alone; the loop terminates by removing a `Reflecting` tag, not by counting messages (a LangGraph port; verdict below) | `pnpm -C examples reflection` |
+
+## LangGraph ports + verdicts
+
+Six ports of canonical LangGraph.js examples — the acceptance gate for the v1
+experiment ("is ECS a good organizing structure for LLM agents?"). The
+aggregate judgment is in [docs/experiment-verdict.md](../docs/experiment-verdict.md).
 
 | Example | Demonstrates | LangGraph.js original | Run |
 |---|---|---|---|
 | [react-agent](react-agent/) | The `callLLM` ↔ `executeTools` dirty-trigger loop (an agent loop with no edges), token streaming through the single run event stream | [quickstart](https://github.com/langchain-ai/langgraphjs/tree/main/examples/quickstart) | `pnpm -C examples react-agent` |
 | [sql-agent](sql-agent/) | English → SQL → answer over a seeded `node:sqlite` DB; tool errors fed back as `tool` messages the model recovers from; `--trace` flight-recorder dump | [sql-agent](https://github.com/langchain-ai/langgraphjs/tree/main/examples/sql-agent) | `pnpm -C examples sql-agent "Which album has the most tracks?"` |
-| [supervisor](supervisor/) | Parallel worker fan-out in one step, deterministic `Inbox` fan-in via reducer, mid-run agent spawning (`ctx.spawn`), crash → `SystemError` → heal → auto-clear | [agent_supervisor.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/multi_agent/agent_supervisor.ipynb) | `pnpm -C examples supervisor` |
-| [reflection](reflection/) | Writer ↔ critic alternation from self-write exclusion alone; loop terminates by removing a `Reflecting` tag, not by counting messages | [reflection.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/reflection/reflection.ipynb) | `pnpm -C examples reflection` |
+| [supervisor](supervisor/) | Parallel worker fan-out, `Inbox` fan-in, mid-run spawning (`ctx.spawn`), crash → heal → auto-clear | [agent_supervisor.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/multi_agent/agent_supervisor.ipynb) | `pnpm -C examples supervisor` |
+| [reflection](reflection/) | Writer ↔ critic cycle with no router; termination by tag removal | [reflection.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/reflection/reflection.ipynb) | `pnpm -C examples reflection` |
 | [human-in-the-loop](human-in-the-loop/) | `needsApproval` tool → run status `'pending'`; process exits mid-conversation and a **different process** loads the `@langecs/persist-fs` snapshot and resumes | [review-tool-calls.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/review-tool-calls.ipynb) | `pnpm -C examples human-in-the-loop`, then `... --resume` |
-| [time-travel](time-travel/) | Per-step checkpoint history (`MemoryAdapter`), rewind via `loadStep`, fork into a fresh world with a divergent input while the original timeline stays intact | [time-travel.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/time-travel.ipynb) | `pnpm -C examples time-travel` |
+| [time-travel](time-travel/) | Per-step checkpoint history (`MemoryAdapter`), rewind via `loadStep`, fork into a fresh world while the original timeline stays intact | [time-travel.ipynb](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/time-travel.ipynb) | `pnpm -C examples time-travel` |
 
-## Verdicts
-
-One honest paragraph per example, condensed from each directory's comparison
-section. Read the full per-example READMEs for the receipts.
+One honest verdict per port, condensed. Read the full per-example READMEs for
+the receipts.
 
 **react-agent — par, with different strengths.** For a single ReAct agent,
 LangGraph's `createReactAgent({ llm, tools })` is genuinely shorter and better
-supported; LangECS needs three wiring steps (model resource, `registerTools`,
-`spawn`) and its `'model:main'` indirection is stringly-typed. LangECS wins on
-runtime transparency — one typed event stream covers steps, timings, and tokens
-(versus four `streamMode`s), and the trace lets the test assert the exact
-choreography in ~20 lines — and on the total absence of routing code: `callLLM`
-setting `PendingToolCalls` *is* the routing, quiescence *is* `__end__`. The ECS
-shape is a bet that pays off later (many agents, one world), not a clear win at
-quickstart size. [Full comparison →](react-agent/README.md)
+supported. LangECS wins on runtime transparency (one typed event stream versus
+four `streamMode`s; the trace asserts the exact choreography in ~20 lines) and
+the total absence of routing code — `callLLM` setting `PendingToolCalls` *is*
+the routing, quiescence *is* `__end__`. [Full comparison →](react-agent/README.md)
 
-**sql-agent — roughly par, with opposite strengths.** The original is a staged
-pipeline (`list_tables → get_schema → generate → check_query → run`), and staged
-pipelines are LangGraph's home turf: its graph *enforces* an ordering and a
-query-review pass that this port only encourages via prompt — which measurably
-mattered, as gpt-4o-mini initially joined on the wrong column and returned a
-wrong answer until the prompt was sharpened. LangECS wins decisively on
-testability (the step-resolution choreography test has no LangGraph
-equivalent), observability, error-as-policy (a rejected `DELETE` comes back as
-a tool message the model reacts to), and sheer ceremony — the equivalent of the
-~120-line graph is zero lines. If your SQL agent is "ReAct with good tools",
-LangECS is the clearer program; if it must be exactly five stages in order,
-port the graph. [Full comparison →](sql-agent/README.md)
+**sql-agent — roughly par, with opposite strengths.** Staged pipelines are
+LangGraph's home turf: its graph *enforces* the
+`list_tables → … → check_query → run` ordering this port only encourages via
+prompt — which measurably mattered. LangECS wins decisively on testability,
+observability, error-as-policy (a rejected `DELETE` comes back as a tool
+message the model reacts to), and ceremony: the equivalent of the ~120-line
+graph is zero lines. [Full comparison →](sql-agent/README.md)
 
 **supervisor — better than the original at the mechanics this pattern is
-about.** Parallel dispatch (both workers in one step, one routing call instead
-of N+1 sequential supervisor hops), deterministic `Inbox` fan-in at the
-barrier, spawning the writer agent mid-run, and crash-as-queryable-state with a
-20-line `heal` system are all natural ECS moves — impossible or
-restructure-required in the compiled graph. It loses on routing ergonomics
-(LangGraph forces the decision through a zod-validated tool call; our
-supervisor hand-parses raw JSON — the weakest part of the port), on flow
-legibility, and on ecosystem. For a production supervisor today LangGraph's
-tooling still wins; this port's value is the same pattern with strictly fewer
-moving parts and stronger runtime introspection.
-[Full comparison →](supervisor/README.md)
+about.** Parallel dispatch in one step, deterministic `Inbox` fan-in,
+mid-run spawning, and crash-as-queryable-state are all natural ECS moves —
+impossible or restructure-required in the compiled graph. It loses on routing
+ergonomics (our supervisor hand-parses raw JSON), flow legibility, and
+ecosystem. [Full comparison →](supervisor/README.md)
 
 **reflection — the dirty-triggering showcase.** The writer↔critic cycle that
 LangGraph needs three edges and a counting router for is simply what the
-scheduler does: each system's own `Messages` append never re-fires itself but
-wakes the other. Termination by removing the `Reflecting` tag is cleaner and
-more inspectable than the original's `messages.length > 6` magic number, and
-the budget is overridable per spawn. But the control flow is *emergent* — a
-newcomer reads `generate → reflect → generate` edges faster than dirty rules —
-the turn-taking convention (`msg.meta.author`) can fail silently, and the code
-volume is roughly equal. Better runtime semantics and testability; worse
-immediate legibility. [Full comparison →](reflection/README.md)
+scheduler does, and tag-removal termination beats the original's
+`messages.length > 6` magic number. But the control flow is *emergent* — a
+newcomer reads explicit edges faster. Better runtime semantics and
+testability; worse immediate legibility. [Full comparison →](reflection/README.md)
 
 **human-in-the-loop — genuinely nicer for tool approval specifically.** One
-`needsApproval: true` flag replaces `interrupt()`, `Command({ resume })`, and
-checkpoint/thread plumbing; there is no replay-on-resume footgun (LangGraph
-re-executes the interrupted node from the top — the test here proves the tool
-runs exactly once); and the suspended state is human-readable JSON you can
-`cat`. Kill-and-resume across real processes is the demo, not an exercise. The
-flip side: `interrupt()` can pause *anywhere* in a node with typed
-payload/resume values, while a LangECS pause point must be designed in advance
-as guard + `Not()` choreography — real work the stdlib has only done for tool
-approval (approve/deny; no edit-the-call preset).
+`needsApproval: true` flag replaces `interrupt()` + `Command({ resume })` +
+checkpoint plumbing, with no replay-on-resume footgun and human-readable JSON
+suspended state. The flip side: LangGraph's `interrupt()` can pause *anywhere*
+with typed payloads; a LangECS pause point must be designed in advance.
 [Full comparison →](human-in-the-loop/README.md)
 
-**time-travel — par overall.** LangECS wins on snapshot transparency (a
-checkpoint is diffable JSON keyed by a plain step integer, not an opaque
-checkpoint UUID found by sniffing `getStateHistory`), fork isolation (a fork is
-a separate world; the test proves the original timeline and its history are
-untouched), and deterministic testing of exact-boundary resume. LangGraph wins
-on ergonomics: in-place branching within one thread, one-call replay from any
-checkpoint, and node-attributed state edits, versus LangECS's
-construct-world → `use` → re-register resources → `load` per fork. Exploring
-trajectories interactively: the original has less friction. Auditing and
-trusting your timelines: this version is easier to reason about.
-[Full comparison →](time-travel/README.md)
+**time-travel — par overall.** LangECS wins on snapshot transparency (diffable
+JSON keyed by a plain step integer), fork isolation, and deterministic testing
+of exact-boundary resume. LangGraph wins on ergonomics: in-place branching,
+one-call replay, node-attributed state edits. Exploring interactively: the
+original has less friction; auditing your timelines: this version is easier to
+trust. [Full comparison →](time-travel/README.md)
 
 ## See also
 

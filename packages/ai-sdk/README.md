@@ -12,19 +12,24 @@ Peer dependency: `ai` (>= 5; developed and tested against v6).
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { fromAiSdk } from '@langecs/ai-sdk';
-import { createWorld } from '@langecs/core';
+import { createWorld, defineResource, type Model } from '@langecs/core';
+import { reactAgent } from '@langecs/stdlib';
+
+const Gpt = defineResource<Model>('model:main');   // a typed resource name
 
 const world = createWorld({ id: 'react-agent-demo' });
-world.register('model:main', fromAiSdk(openai('gpt-4o-mini')));
+world.register(Gpt, fromAiSdk(openai('gpt-4o-mini')));
+const assistant = reactAgent({ name: 'assistant', model: Gpt });
 ```
 
 That registry line is the entire provider integration. The agent definition references
-the model **by resource name** (`ModelRef('model:main')`), so swapping providers is a
-one-liner — change the registration, touch nothing else:
+the model **by resource name** (`Gpt` is just `'model:main'` carrying the `Model` type;
+the plain string works everywhere a ref does), so swapping providers is a one-liner —
+change the registration, touch nothing else:
 
 ```ts
 import { anthropic } from '@ai-sdk/anthropic';
-world.register('model:main', fromAiSdk(anthropic('claude-sonnet-4-6')));
+world.register(Gpt, fromAiSdk(anthropic('claude-sonnet-4-6')));
 ```
 
 `fromAiSdk` also accepts a gateway model id string, since AI SDK v6's `LanguageModel`

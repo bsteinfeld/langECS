@@ -13,7 +13,14 @@
     "supervisor": "tsx supervisor/main.ts",
     "reflection": "tsx reflection/main.ts",
     "human-in-the-loop": "tsx human-in-the-loop/main.ts",
-    "time-travel": "tsx time-travel/main.ts"
+    "time-travel": "tsx time-travel/main.ts",
+    "hello-world": "tsx hello-world/main.ts",
+    "order-pipeline": "tsx order-pipeline/main.ts",
+    "tools-from-scratch": "tsx tools-from-scratch/main.ts",
+    "support-desk": "tsx support-desk/main.ts",
+    "content-pipeline": "tsx content-pipeline/main.ts",
+    "code-review-crew": "tsx code-review-crew/main.ts",
+    "research-team": "tsx research-team/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",

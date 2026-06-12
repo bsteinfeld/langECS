@@ -18,6 +18,7 @@ import {
 import type { ChangeRecord, PairRef, Run, RunResult, RunStatus } from './events';
 import { RunStream } from './events';
 import type { PersistenceAdapter } from './persistence';
+import type { ResourceRef } from './resource';
 import type { Snapshot } from './snapshot';
 import type {
   EntityHandle,
@@ -78,6 +79,12 @@ export interface World {
    * a different definition throws `DuplicateSystemError` (R21).
    */
   use(def: SystemDef<any> | AgentDef): void;
+  /**
+   * Registers a resource under a typed `ResourceRef` (R18 amended): `value`
+   * is checked against the ref's `T`, and `ctx.resource(ref)` reads it back
+   * typed. Same string-keyed slot as the name form below.
+   */
+  register<T>(ref: ResourceRef<T>, value: NoInfer<T>): void;
   /**
    * Registers a named resource for `ctx.resource(name)` (R18) — models, DB
    * handles, anything non-serializable. Resources are never snapshotted;
@@ -196,6 +203,10 @@ interface BarrierOutcome {
 }
 
 const pairId = (systemKey: string, entity: number): string => `${systemKey}::${entity}`;
+
+/** A `ResourceRef` is just a typed name (R18 amended): unwrap to the slot key. */
+const resourceNameOf = (nameOrRef: string | ResourceRef<unknown>): string =>
+  typeof nameOrRef === 'string' ? nameOrRef : nameOrRef.resourceName;
 
 class WorldImpl implements World {
   readonly id: string;
@@ -325,8 +336,10 @@ class WorldImpl implements World {
     this.refreshDirt([]);
   }
 
-  register(name: string, resource: unknown): void {
-    this.resources.set(name, resource);
+  register<T>(ref: ResourceRef<T>, value: NoInfer<T>): void;
+  register(name: string, resource: unknown): void;
+  register(nameOrRef: string | ResourceRef<unknown>, resource: unknown): void {
+    this.resources.set(resourceNameOf(nameOrRef), resource);
   }
 
   private registerAgent(agent: AgentDef): void {
@@ -738,7 +751,9 @@ class WorldImpl implements World {
     };
   }
 
-  private lookupResource<T>(name: string): T {
+  /** Refs and plain names address the same slot (R18 amended). */
+  private lookupResource<T>(nameOrRef: string | ResourceRef<T>): T {
+    const name = resourceNameOf(nameOrRef);
     if (!this.resources.has(name)) throw new MissingResourceError(name);
     return this.resources.get(name) as T;
   }
@@ -748,7 +763,7 @@ class WorldImpl implements World {
     return {
       step: stepNo,
       world: this.worldReadView(),
-      resource: <T>(name: string): T => this.lookupResource<T>(name),
+      resource: <T>(nameOrRef: string | ResourceRef<T>): T => this.lookupResource(nameOrRef),
     };
   }
 
@@ -781,7 +796,7 @@ class WorldImpl implements World {
       emit: (data) => {
         stream.emit({ type: 'custom', step: stepNo, system: sys.key, entity, data });
       },
-      resource: <T>(name: string): T => this.lookupResource<T>(name),
+      resource: <T>(nameOrRef: string | ResourceRef<T>): T => this.lookupResource(nameOrRef),
       invalidate: (target, system) => {
         const op: BufferOp = { kind: 'invalidate', entity: resolveTarget(target) };
         if (system !== undefined) op.system = system;

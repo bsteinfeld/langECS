@@ -229,7 +229,9 @@ interface SystemCtx {
   remove(target: EntityTarget, component: ComponentType<any>): void;
   emit(data: unknown): void;           // push a 'custom' event live, mid-step;
                                        // observation only, never stored
-  resource<T>(name: string): T;        // throws MissingResourceError if absent
+  resource<T>(ref: ResourceRef<T>): T; // typed lookup, T inferred from the ref
+  resource<T>(name: string): T;        // string form, same slot as the ref form;
+                                       // both throw MissingResourceError if absent
   invalidate(target: EntityTarget, system?: string): void;  // manual dirt for next step
 }
 
@@ -307,7 +309,7 @@ interface WorldOptions {
 | `step` | `readonly number` | Committed step counter; increments at each barrier. |
 | `spawn` | `(...items: (ComponentInit \| AgentDef)[]) => EntityHandle` | Creates an entity (ids start at 1, never reused). Idle-only. |
 | `use` | `(def: SystemDef \| AgentDef) => void` | Registers a global system, or an agent's scoped systems **without spawning** — required before `load()` of a snapshot containing that agent's entities. Idempotent per definition; same name + different definition throws. |
-| `register` | `(name: string, resource: unknown) => void` | Named resource for `ctx.resource(name)`. Never snapshotted; re-register after `load()`. |
+| `register` | `(name: string, resource: unknown) => void` \| `<T>(ref: ResourceRef<T>, value: T) => void` | Named resource for `ctx.resource`. The typed overload checks `value` against the ref's `T` (see below). Never snapshotted; re-register after `load()`. |
 | `query` | `(...terms: QueryTerm[]) => EntityHandle[]` | Committed state, ordered by entity id. Zero-term and negative-only queries allowed (debugging). |
 | `entity` | `(id: number) => EntityHandle \| undefined` | Lookup by id. |
 | `run` | `(opts?: { limit?: number }) => Run` | Drives the step loop to quiescence. One run at a time (second call throws `WorldRunningError`). |
@@ -317,6 +319,27 @@ interface WorldOptions {
 | `snapshot` | `() => Snapshot` | Sync, JSON-stringifiable, detached. |
 | `load` | `(snapshot: Snapshot) => void` | Restores entities, counters, and pending dirt; discards the previous timeline and clears the trace buffer. |
 | `getTrace` | `() => StepTrace[]` | The flight recorder's ring buffer. |
+
+### `defineResource<T>(name): ResourceRef<T>`
+
+A **typed resource reference**: the resource name carrying the resource's type. Purely a
+type-level affordance — at runtime a ref is just `{ resourceName }`; there is no global
+registry and no uniqueness rule, and a ref interoperates with the plain string form
+(same name = same slot, register by one and read by the other).
+
+```ts
+// Before — stringly typed; T asserted at every call site:
+world.register('model:main', client);
+const model = ctx.resource<Model>('model:main');
+
+// After — typed name; register value checked, lookup type inferred:
+const MainModel = defineResource<Model>('model:main');
+world.register(MainModel, client);      // value must be a Model
+const model = ctx.resource(MainModel);  // Model — no manual generic
+```
+
+A missing resource still throws `MissingResourceError` naming the resource, whichever
+form looked it up.
 
 ---
 

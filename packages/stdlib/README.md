@@ -7,7 +7,7 @@ systems, no privileged engine hooks. If the stdlib conventions don't fit, write 
 systems against the same components.
 
 ```ts
-import { createWorld, scriptedModel } from '@langecs/core';
+import { createWorld, defineResource, type Model, scriptedModel } from '@langecs/core';
 import { defineTool, lastAssistant, reactAgent, registerTools, sendMessage } from '@langecs/stdlib';
 
 const add = defineTool({
@@ -24,14 +24,16 @@ const add = defineTool({
   },
 });
 
+const Gpt = defineResource<Model>('model:main');   // a typed resource name
+
 const world = createWorld();
-world.register('model:main', scriptedModel([   // any core `Model`; see the adapters for real ones
+world.register(Gpt, scriptedModel([   // any core `Model`; see the adapters for real ones
   { role: 'assistant', content: '', toolCalls: [{ id: 'call-1', name: 'add', args: { a: 2, b: 3 } }] },
   { role: 'assistant', content: 'The answer is 5.' },
 ]));
 registerTools(world, [add]);
 const agent = world.spawn(
-  reactAgent({ name: 'mathbot', model: 'model:main', tools: [add], systemPrompt: 'Be terse.' }),
+  reactAgent({ name: 'mathbot', model: Gpt, tools: [add], systemPrompt: 'Be terse.' }),
 );
 
 const result = await sendMessage(world, agent, 'What is 2 + 3?');
@@ -40,10 +42,11 @@ lastAssistant(world, agent)?.content;     // 'The answer is 5.'
 ```
 
 Swap `scriptedModel` for a real model with one registry line
-(`world.register('model:main', fromAiSdk(openai('gpt-4o-mini')))` — see
+(`world.register(Gpt, fromAiSdk(openai('gpt-4o-mini')))` — see
 [@langecs/ai-sdk](../ai-sdk/README.md)); the agent definition does not change. That
 split is the point: **components hold data, world resources hold behavior**, and
-components reference behavior by name.
+components reference behavior by name — a `ResourceRef` like `Gpt` is just that
+name with the resource's type attached, interchangeable with the plain string.
 
 ---
 
@@ -242,6 +245,9 @@ sendMessage(world: World, agent: EntityTarget, text: string): Run
 
 lastAssistant(world: World, agent: EntityTarget): Msg | undefined
 // the most recent assistant message on the agent
+
+ask(world: World, agent: EntityTarget, text: string): Promise<string>
+// sendMessage + await + lastAssistant().content — the one-liner Q&A path
 ```
 
 Multi-turn conversation is just repeated `sendMessage` — each call re-raises
@@ -254,6 +260,63 @@ await sendMessage(world, agent, 'two');
 lastAssistant(world, agent)?.content;  // 'second answer'
 ```
 
+### `ask`
+
+When all you want is the reply text:
+
+```ts
+const answer = await ask(world, agent, 'What is 2 + 3?');  // 'The answer is 5.'
+```
+
+`ask` resolves only fully-automatic turns that quiesce as `'done'`; any other
+outcome throws an `Error` that says what happened and what to do next:
+
+| Run status | The thrown error explains... |
+|---|---|
+| `'pending'` | which entities await human input and which interrupt kinds — answer with `world.pending()` / `world.resume(entity, value)`, then read `lastAssistant`. |
+| `'error'` | each failing system's name and error message (from the `SystemError` records). |
+| `'limit'` | the step cap was hit — raise `recursionLimit` (or `world.run({ limit })`), or find the non-quiescing cycle in `world.getTrace()`. |
+| `'idle'` / `'done'` without a reply | the agent isn't wired to answer — spawn via `reactAgent` or `world.use(...)` the chat systems. |
+
+Approval flows keep using `sendMessage` + `world.resume` (the `Run` statuses are the
+control flow there); `ask` is for the turns that should just answer.
+
+---
+
+## Structured output
+
+```ts
+extractJson<T = unknown>(model: Model, opts: {
+  prompt?: string;                   // one-shot user message (appended after `messages`)
+  messages?: Msg[];                  // conversation context to extract from
+  system?: string;                   // your system text; the strict-JSON directive is appended
+  schema?: Record<string, unknown>;  // JSON Schema, embedded as text in the instruction
+  schemaName?: string;               // display name for the schema, e.g. 'Person'
+}): Promise<T>
+```
+
+Model-agnostic structured output over any core `Model` (no provider-specific
+JSON mode required): instructs the model to reply with strict JSON — embedding
+the schema text when given — strips markdown code fences, and `JSON.parse`s the
+reply. On a parse failure it retries **once** with the malformed output and the
+parse error appended as context, then throws a descriptive error.
+
+```ts
+const person = await extractJson<{ name: string; age: number }>(model, {
+  prompt: 'Extract the person from: "Ada Lovelace, 36, mathematician."',
+  schema: {
+    type: 'object',
+    properties: { name: { type: 'string' }, age: { type: 'number' } },
+    required: ['name', 'age'],
+  },
+  schemaName: 'Person',
+});
+```
+
+`T` is a **caller assertion, not validation** — the parsed value is returned as
+`T` unchecked. Validate with your schema library where correctness matters. The
+schema is only ever embedded as instruction text; nothing is validated against it.
+
 ---
 
 ## `reactAgent(opts): AgentDef`
@@ -264,7 +327,8 @@ The preset that wires all of the above into a spawnable
 ```ts
 interface ReactAgentOptions {
   name: string;                  // becomes the auto-tag `agent:<name>` (globally unique)
-  model: string;                 // resource name the Model is registered under
+  model: string | ResourceRef<Model>;  // typed ref from defineResource<Model>(...), or the
+                                       // plain resource name; only the name is stored (ModelRef)
   tools?: (string | ToolDef)[];  // names land in the Tools component; ToolDef
                                  // implementations must still be registered via registerTools
   systemPrompt?: string;

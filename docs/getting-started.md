@@ -7,9 +7,10 @@ architecture — "LangGraph.js, but the runtime is a living ECS world". Agents a
 there are no edges: the agent loop emerges from data changing.
 
 This is an experiment in validating that mapping (see [DESIGN.md](../DESIGN.md) and
-[prior-art.md](./prior-art.md)). The six [examples](../examples/) are ports of
-LangGraph.js originals, each with an honest side-by-side comparison. `langecs` is a
-working title — see [naming.md](./naming.md).
+[prior-art.md](./prior-art.md)). The [examples](../examples/) form a learning path:
+seven standalone examples plus six ports of LangGraph.js originals, each port with
+an honest side-by-side comparison. `langecs` is a working title — see
+[naming.md](./naming.md).
 
 This page walks you through building one ReAct agent end to end. It mirrors
 [`examples/react-agent`](../examples/react-agent/), which is the same program with
@@ -63,11 +64,13 @@ snapshot resume in any process that re-registers the same names.
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { fromAiSdk } from '@langecs/ai-sdk';
+import { defineResource, type Model } from '@langecs/core';
 import { loadEnvLocal } from './_shared/env';
 
 loadEnvLocal();   // repo-root .env.local -> process.env (OPENAI_API_KEY); no dotenv dep
 
-world.register('model:main', fromAiSdk(openai('gpt-4o-mini')));
+const MainModel = defineResource<Model>('model:main');   // a typed resource name
+world.register(MainModel, fromAiSdk(openai('gpt-4o-mini')));
 ```
 
 `@langecs/ai-sdk` wraps any Vercel AI SDK model into the core `Model` contract
@@ -79,7 +82,7 @@ network. This is exactly how every example's test works:
 ```ts
 import { scriptedModel } from '@langecs/core';
 
-world.register('model:main', scriptedModel([
+world.register(MainModel, scriptedModel([
   // Turn 1: the model requests a tool call.
   {
     role: 'assistant',
@@ -128,7 +131,7 @@ import { reactAgent } from '@langecs/stdlib';
 
 const assistant = reactAgent({
   name: 'assistant',
-  model: 'model:main',          // resource name, not a client object
+  model: MainModel,             // a typed resource ref — only its name is stored, never a client
   tools: [weatherTool],         // names land in the Tools component
   systemPrompt: 'You are a helpful assistant. Use get_weather for weather questions.',
 });
@@ -279,6 +282,13 @@ pretty-prints it when you're debugging "why didn't my system fire".
 
 ## Where next
 
+- [`examples/`](../examples/README.md) — thirteen runnable examples as a
+  learning path. Start with **hello-world**, **order-pipeline**, and
+  **tools-from-scratch** (an agent from raw parts → the engine as a no-LLM
+  workflow runtime → the tool loop demystified), then the real-world workflows
+  (support-desk, content-pipeline, code-review-crew), the multi-agent patterns
+  (research-team, supervisor, reflection), and finally the six LangGraph.js
+  ports with their honest verdicts.
 - [concepts.md](./concepts.md) — the full mental model: the step loop, dirty
   rules, reducers, scoping, snapshots.
 - The guides — task-focused deep dives:
@@ -289,9 +299,6 @@ pretty-prints it when you're debugging "why didn't my system fire".
   [streaming and observability](./guides/streaming-and-observability.md).
 - [langgraph-comparison.md](./langgraph-comparison.md) — concept-by-concept map
   for LangGraph.js developers, honest about divergences.
-- [`examples/`](../examples/) — six LangGraph.js ports, each with a README
-  comparing it to the original: react-agent, sql-agent, supervisor, reflection,
-  human-in-the-loop, time-travel.
 - [prior-art.md](./prior-art.md) — what already exists and what this experiment
   actually adds.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — workspace layout, commands, and where

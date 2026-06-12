@@ -14,7 +14,8 @@ export {
   type ToolCall,
   Tools,
 } from './components';
-export { lastAssistant, sendMessage, userMessage } from './helpers';
+export { type ExtractJsonOptions, extractJson } from './extract';
+export { ask, lastAssistant, sendMessage, userMessage } from './helpers';
 export { type ReactAgentOptions, reactAgent } from './react';
 export { callLLM, executeTools, retry, toolApproval } from './systems';
 export {
