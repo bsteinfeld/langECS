@@ -231,6 +231,55 @@ const callLLM = defineSystem({
 | T20 | ctx.invalidate refires a pair with no other dirt |
 | T21 | determinism: identical scripted run twice → identical component state + identical trace shape (ignoring `ms`) |
 | T22 | type-level tests per R39 (`expectTypeOf`) |
+| T23 | `observe()`: onEvent tap equals Run iteration order; `run:reject` on barrier rejection (no `run:end`); detach idempotent; throwing observers isolated |
+| T24 | `wrapSystemRun`: first-registered-outermost composition, `SystemRunInfo` contents, system throw rejects `fn`, wrapper rejection lands as SystemError (R31 parity) |
+| T25 | `onExternalChange`: every kind fires (spawn/write/remove/despawn/load/systems/resource) |
+| T26 | introspection: `systems()` (agent scoping, include/exclude, hasGuard), `resources()`, `listComponents()` flags, `world.running` |
+
+## 14. Observability & introspection (devtools surface)
+
+*Added for `@langecs/otel` and `@langecs/devtools`. Everything here is strictly
+outside engine semantics: with no observers attached there is zero behavioral
+difference, and a buggy observer can never change scheduling, state, or run
+results.*
+
+- **R45** `world.observe(observer: WorldObserver): () => void` attaches an observer; the
+  returned detach function is idempotent **per registration** (attaching the same observer twice
+  yields two independent detaches — double-calling one never removes the other). 
+  `observer.onEvent?(event, { worldId, runId })` is a **passive tap** called synchronously at the
+  same points the run's stream emits, for every run, regardless of whether anyone iterates the
+  `Run`. `ObserverEvent = RunEvent | { type: 'run:reject'; error: SerializedError }` —
+  `run:reject` fires when a run rejects at the barrier (a rejected run emits no `run:end`, R40),
+  so observers can always close out a run. Exceptions thrown by `onEvent`/`onExternalChange` are
+  caught and reported via `console.error` (guarded — console is not assumed, R1); they never
+  affect the run. *Counter caveat:* `step:applied` is emitted **before** `world.step` increments
+  (R25 step 7/8), so inside that callback `world.step`/`world.snapshot().step` still read the
+  previous boundary while entities and dirt are post-step; the event's own `step` field is the
+  truthful label. (Engine-persisted snapshots, R37, are taken after the increment and are
+  unaffected.)
+- **R46** `observer.wrapSystemRun?(info: SystemRunInfo, fn) => Promise<void>` is middleware
+  around one pair's `run` execution (the async-context hook for tracing). Contract: call `fn`
+  **exactly once** and propagate its settlement. `fn` rejects iff the system threw (sync throws
+  surface as rejections); the engine treats any rejection of the composed wrapper as the system
+  throwing (R31) — a wrapper that throws on its own is indistinguishable from a system error.
+  The reverse direction is engine-enforced, not contract-hoped: the system's own failure is
+  tracked out-of-band, so a wrapper that **swallows** `fn`'s rejection still yields a failed
+  pair — R31's discard-entire-buffer and R32's auto-clear can never be subverted into a partial
+  commit by a buggy wrapper. Wrappers compose across observers, first-registered outermost.
+  `when` guards are never wrapped.
+- **R47** Introspection, all read-only over committed registration state:
+  `world.running: boolean` (a run is in flight, R16/R25); `world.systems(): SystemInfo[]` in
+  registration order, where `SystemInfo = { key, name, agent?, query: { include: string[];
+  exclude: string[] } /* effective query, auto-tag included */, hasGuard }`;
+  `world.resources(): string[]` (sorted names — values are never exposed, R18);
+  `listComponents(): ComponentInfo[]` (module-level, over the global registry R7), where
+  `ComponentInfo = { name, tag, reducer, transient }`, sorted by name.
+- **R48** `observer.onExternalChange?(change)` fires after an idle-time change commits (and after
+  its dirt refresh): `{ kind: 'spawn' | 'despawn', entity }`, `{ kind: 'write' | 'remove',
+  entity, component }` (one per external `add`/`set`/`remove`, including those inside
+  `world.send`/`world.resume`), `{ kind: 'load' }`, `{ kind: 'systems' }` (`world.use`),
+  `{ kind: 'resource', name }` (`world.register`). The payload identifies *what* changed, never
+  values — consumers refetch what they render.
 
 ---
 
@@ -250,6 +299,28 @@ Preset: `reactAgent({ name, model: string /* resource name */, tools: string[] |
 
 ### `@langecs/persist-fs`
 `fsAdapter({ dir })`: `<dir>/<worldId>/step-00042.json` + `latest.json`, atomic writes (tmp + rename), `history`/`loadStep` from directory listing. Tested with tmp dirs.
+
+### `@langecs/otel`
+OpenTelemetry bridge over `world.observe` (§14). Depends only on `@opentelemetry/api`
+(peer); never bundles an SDK — the host app owns providers/exporters (standard OTel
+instrumentation-library layering). `instrumentWorld(world)`: run + step spans from the event
+tap, per-pair system spans via `wrapSystemRun` with the span's context made **active** (user
+code inside a system — model calls, fetches — nests correctly), errors →
+`recordException` + ERROR status, `ctx.emit` → span events, metrics (durations, error count,
+entity gauge). `instrumentModel(model)` / `instrumentTool(tool)`: GenAI semantic-convention
+spans (`chat {model}` / `execute_tool {name}`, `gen_ai.*` attrs incl. token usage; message
+content capture opt-in via `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`). Tested with
+in-memory exporters — deterministic, zero network.
+
+### `@langecs/devtools`
+Local inspector GUI. Node server (`startDevtools(world, opts)`): WebSocket protocol for live
+world state + control, an **OTLP/HTTP JSON trace receiver** at `POST /v1/traces` (any
+standards-compliant OTel exporter can feed the trace view), static React UI from `dist/ui`.
+Read: entities/components (transient included), systems, pending dirt, flight recorder,
+run events, interrupts, spans. Write: component add/set/remove, spawn/despawn, `run`/`send`/
+`resume`, snapshot download, time travel via a `PersistenceAdapter`'s `history`/`loadStep`.
+All mutation is **idle-only** (R16) — enforced server-side with clear errors, never bypassing
+engine invariants.
 
 ### Examples (`examples/*`)
 Each: `main.ts` (real model: `@ai-sdk/openai` via `.env.local`), `agent.ts`-style shared module, `*.test.ts` with `scriptedModel` (deterministic, no network), `README.md` with a side-by-side honest comparison to the LangGraph.js original (link + what's better/worse). The human-in-the-loop example must demonstrate kill-and-resume across processes using `@langecs/persist-fs`. The time-travel example must rewind and fork. The sql-agent uses `node:sqlite` (requires Node ≥22.5 — note in its README) with a small seeded database.

@@ -72,6 +72,9 @@ export function isComponentType(term: QueryTerm): term is ComponentType<any> {
 // Global registry: component name -> definition, so snapshots rehydrate by name
 // and reducers/serializers re-attach (R7).
 const registry = new Map<string, ComponentType<any>>();
+// Tags are plain `ComponentType<true>`s at runtime; tracked separately so
+// `listComponents()` can report them (R47) without widening the public shape.
+const tags = new WeakSet<ComponentType<any>>();
 
 function makeComponent<T>(opts: ComponentOptions<T>, zeroArgDefault?: T): ComponentType<T> {
   if (registry.has(opts.name)) throw new DuplicateComponentError(opts.name);
@@ -117,7 +120,9 @@ export function defineComponent<T>(opts: ComponentOptions<T>): ComponentType<T> 
  * masquerade as a positive query term (R39).
  */
 export function defineTag<const N extends string>(name: N): TagType<N> {
-  return makeComponent<true>({ name }, true) as TagType<N>;
+  const tag = makeComponent<true>({ name }, true) as TagType<N>;
+  tags.add(tag);
+  return tag;
 }
 
 /**
@@ -127,4 +132,31 @@ export function defineTag<const N extends string>(name: N): TagType<N> {
  */
 export function getComponentByName(name: string): ComponentType<any> | undefined {
   return registry.get(name);
+}
+
+/** One registry entry, as reported by `listComponents()` (R47). */
+export interface ComponentInfo {
+  name: string;
+  /** Defined via `defineTag` (zero-arg callable, value always `true`). */
+  tag: boolean;
+  /** Has a merge reducer (concurrent same-step `add`s merge, R30). */
+  reducer: boolean;
+  /** Excluded from snapshots (R35). */
+  transient: boolean;
+}
+
+/**
+ * Lists every component in the global registry, sorted by name (R47) — the
+ * devtools surface for "what components exist", e.g. to offer an add-component
+ * picker. Reflects whatever modules have been imported so far (R7).
+ */
+export function listComponents(): ComponentInfo[] {
+  return [...registry.values()]
+    .map((c) => ({
+      name: c.componentName,
+      tag: tags.has(c),
+      reducer: c.reducer !== undefined,
+      transient: c.transient,
+    }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }

@@ -11,12 +11,14 @@ export {
   SystemError,
 } from './builtins';
 export {
+  type ComponentInfo,
   type ComponentInit,
   type ComponentOptions,
   type ComponentType,
   defineComponent,
   defineTag,
   getComponentByName,
+  listComponents,
   Not,
   type NotTerm,
   type QueryTerm,
@@ -50,6 +52,17 @@ export {
   scriptedModel,
   type ToolSpec,
 } from './model';
+// Observability & introspection (SPEC §14): `world.observe(...)` for devtools
+// and telemetry bridges (passive event tap, external-change notifications,
+// system-run middleware), plus `world.systems()`/`world.resources()`.
+export type {
+  ExternalChange,
+  ObserverEvent,
+  RunInfo,
+  SystemInfo,
+  SystemRunInfo,
+  WorldObserver,
+} from './observe';
 export { MemoryAdapter, type PersistenceAdapter } from './persistence';
 // Typed resource references (R18 amended): replace stringly-typed hops like
 // `ctx.resource<Model>('model:main')` with

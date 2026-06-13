@@ -20,14 +20,21 @@
     "support-desk": "tsx support-desk/main.ts",
     "content-pipeline": "tsx content-pipeline/main.ts",
     "code-review-crew": "tsx code-review-crew/main.ts",
-    "research-team": "tsx research-team/main.ts"
+    "research-team": "tsx research-team/main.ts",
+    "devtools-demo": "tsx devtools-demo/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",
     "@langecs/ai-sdk": "workspace:*",
     "@langecs/core": "workspace:*",
+    "@langecs/devtools": "workspace:*",
+    "@langecs/otel": "workspace:*",
     "@langecs/persist-fs": "workspace:*",
     "@langecs/stdlib": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.219.0",
+    "@opentelemetry/resources": "^2.8.0",
+    "@opentelemetry/sdk-trace-node": "^2.8.0",
     "ai": "^6.0.199"
   },
   "devDependencies": {

@@ -280,9 +280,27 @@ expect(trace.map((s) => s.runs.map((r) => r.system))).toEqual([
 which a `when` guard vetoed, every write, timings, errors. `formatTrace(steps)`
 pretty-prints it when you're debugging "why didn't my system fire".
 
+## See it: the visual inspector
+
+One call puts the whole world on screen — entities and their components (with
+live editing), system queries and pending pairs, the flight-recorder timeline,
+OpenTelemetry traces, and a form to answer `AwaitingHuman` interrupts:
+
+```ts
+import { startDevtools } from '@langecs/devtools';
+const server = await startDevtools(world);
+console.log(server.url); // http://127.0.0.1:4477
+```
+
+Try it without writing anything: `pnpm build` once (builds the UI), then
+`pnpm -C examples devtools-demo` — a seeded world with a pending refund
+approval, zero API keys. [examples/devtools-demo](../examples/devtools-demo/README.md)
+has the tour; add [`@langecs/otel`](../packages/otel) instrumentation for the
+trace waterfall.
+
 ## Where next
 
-- [`examples/`](../examples/README.md) — thirteen runnable examples as a
+- [`examples/`](../examples/README.md) — fourteen runnable examples as a
   learning path. Start with **hello-world**, **order-pipeline**, and
   **tools-from-scratch** (an agent from raw parts → the engine as a no-LLM
   workflow runtime → the tool loop demystified), then the real-world workflows
@@ -308,10 +326,6 @@ pretty-prints it when you're debugging "why didn't my system fire".
 
 Designed but deliberately deferred until after the example-port verdict:
 
-- **OTel export** — built as a consumer of the flight-recorder trace format, no
-  bespoke plumbing.
-- **Visual world inspector** — watch components flow between agents, step
-  slider / time travel; also a consumer of the trace format.
 - YAML/JSON declarative agent format, per-entity stepping, durable persistence
   adapters (SQLite/Postgres/Redis), a LangGraph interop adapter, and the
   long-lived server-world runtime — see [DESIGN.md §11](../DESIGN.md) for the

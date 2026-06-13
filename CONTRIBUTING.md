@@ -46,7 +46,10 @@ pnpm -C packages/<name> typecheck   # tsc --noEmit
 pnpm -C packages/<name> build       # tsdown
 ```
 
-where `<name>` is one of `core`, `stdlib`, `ai-sdk`, `langchain`, `persist-fs`.
+where `<name>` is one of `core`, `stdlib`, `ai-sdk`, `langchain`, `persist-fs`,
+`otel`, `devtools`. (`devtools` builds the React UI too: tsdown, then Vite into
+`dist/ui`; `pnpm -C packages/devtools dev:ui` runs the UI dev server against a
+live world.)
 
 ### Examples
 
@@ -79,6 +82,8 @@ when `OPENAI_API_KEY` is absent (`describe.skipIf`).
 | `packages/ai-sdk` | `@langecs/ai-sdk` | Model adapter wrapping the Vercel AI SDK (`ai` v6, peer dep). |
 | `packages/langchain` | `@langecs/langchain` | Model adapter wrapping LangChain.js chat models (`@langchain/core` peer dep). |
 | `packages/persist-fs` | `@langecs/persist-fs` | Filesystem persistence adapter (snapshots, history, time travel). |
+| `packages/otel` | `@langecs/otel` | OpenTelemetry instrumentation over the observer surface (SPEC §14); `@opentelemetry/api` peer dep only, GenAI semconv for model/tool spans. |
+| `packages/devtools` | `@langecs/devtools` | Visual inspector: Node server (WebSocket protocol + OTLP/HTTP JSON receiver) plus a React UI in `ui/` served from `dist/ui`. |
 | `examples/` | `langecs-examples` | Six LangGraph.js ports (react-agent, sql-agent, supervisor, reflection, human-in-the-loop, time-travel). These are the **v1 acceptance test** — the experiment's verdict is judged on them. |
 
 ## Where design truth lives

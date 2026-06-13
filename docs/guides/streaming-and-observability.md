@@ -217,20 +217,27 @@ happened to be watching it. It also means events are at-most-once delivery withi
 process: if nothing is iterating a `Run` and the process dies, the events are gone,
 but no truth was lost — it's all in the components.
 
-## Roadmap
+## OpenTelemetry and the visual inspector
 
-Two observability consumers are designed but deliberately deferred until after the
-example-port validation ([DESIGN](../../DESIGN.md) §8); both will be built strictly as
-consumers of the flight-recorder trace format above, which is why that format is a v1
-design surface:
+Both observability consumers ship as packages built strictly on the observer surface
+(SPEC §14: `world.observe` — a passive event tap, external-change notifications, and a
+system-run middleware; observers can never alter a run's outcome, R45):
 
-- **OpenTelemetry export** — spans derived from `StepTrace` (steps, runs, errors,
-  timings).
-- **Visual world inspector** — watch components flow between agents, with a step
-  slider over checkpoint history for time-travel debugging.
+- [`@langecs/otel`](../../packages/otel) — OpenTelemetry instrumentation.
+  `instrumentWorld(world)` emits `langecs.run` → `langecs.step` → `langecs.system`
+  spans (system spans are *active* around your system's code, so model/tool calls nest
+  under them), plus GenAI-semantic-convention `chat`/`execute_tool` spans with token
+  usage via `instrumentModel`/`instrumentTool`. Depends only on `@opentelemetry/api`;
+  your app owns the SDK and exporters.
+- [`@langecs/devtools`](../../packages/devtools) — the visual inspector.
+  `startDevtools(world)` serves a local GUI: live entity/component editing, systems
+  and dirty-pair views, the flight-recorder timeline, an OTLP/HTTP trace waterfall,
+  interrupt answering, and a checkpoint-history time-travel panel.
 
-If you want to build against the trace format, start with
-[CONTRIBUTING.md](../../CONTRIBUTING.md) for where design truth lives.
+[`examples/devtools-demo`](../../examples/devtools-demo/README.md) wires both onto a
+seeded world with zero API keys. If you want to build your own consumer against the
+trace format or observer surface, start with [CONTRIBUTING.md](../../CONTRIBUTING.md)
+for where design truth lives.
 
 ## See also
 

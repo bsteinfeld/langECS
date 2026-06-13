@@ -174,10 +174,12 @@ And when something *doesn't* fire, the built-in flight recorder answers why: eve
 | [`@langecs/ai-sdk`](packages/ai-sdk) | `fromAiSdk(model)`: any Vercel AI SDK provider as a LangECS `Model`, with tool calls and token streaming. |
 | [`@langecs/langchain`](packages/langchain) | `fromLangChain(chatModel)`: any LangChain.js chat model as a LangECS `Model`. |
 | [`@langecs/persist-fs`](packages/persist-fs) | `fsAdapter({ dir })`: one JSON snapshot per step boundary on disk, atomic writes, `history()`/`loadStep()`. |
+| [`@langecs/otel`](packages/otel) | OpenTelemetry instrumentation over `world.observe` (SPEC §14): run/step/system spans, GenAI-semconv model & tool spans with token usage, metrics. Depends only on `@opentelemetry/api`. |
+| [`@langecs/devtools`](packages/devtools) | The visual inspector: live entity/component editing, systems & dirty-pair view, flight-recorder timeline, OTLP trace waterfall, interrupt answering, time travel — `startDevtools(world)`. |
 
 ## Examples
 
-Thirteen runnable examples form a learning path — [examples/README.md](examples/README.md) is the full index. Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY` — except order-pipeline, which makes zero model calls) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network. Every `main.ts` outside the ports is await-and-read-state — no event handling required; streaming is opt-in ([supervisor](examples/supervisor/README.md) is the full event-stream demo).
+Fourteen runnable examples form a learning path — [examples/README.md](examples/README.md) is the full index. Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY` — except order-pipeline, which makes zero model calls) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network. Every `main.ts` outside the ports is await-and-read-state — no event handling required; streaming is opt-in ([supervisor](examples/supervisor/README.md) is the full event-stream demo).
 
 **Start here**
 
@@ -186,6 +188,7 @@ Thirteen runnable examples form a learning path — [examples/README.md](example
 | [hello-world](examples/hello-world/README.md) | A chat agent from raw parts — one component, one tag, one system; quiescence ends the run |
 | [order-pipeline](examples/order-pipeline/README.md) | A no-LLM workflow engine — stage components, free per-order concurrency, retry-after-failure |
 | [tools-from-scratch](examples/tools-from-scratch/README.md) | The tool loop demystified — `think` ↔ `act` by hand, no loop construct, then the `reactAgent` preset |
+| [devtools-demo](examples/devtools-demo/README.md) | The inspector GUI on a live world — edit components, approve interrupts, time-travel, OTel traces (no API key needed) |
 
 **Real-world workflows**
 
@@ -235,7 +238,7 @@ Thirteen runnable examples form a learning path — [examples/README.md](example
 - [docs/experiment-verdict.md](docs/experiment-verdict.md) — the aggregate verdict on the six ports: hypothesis validated, with the wins/losses pattern and what gates a release
 - [docs/prior-art.md](docs/prior-art.md) — what already exists (ArgOS, Simulation Streams, blackboard systems, Pregel, production rules, Linda, durable execution) and which claims we soften because of it
 - [DESIGN.md](DESIGN.md) — the decision record: why each piece is the way it is
-- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R44) and the required test matrix (T1–T22)
+- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R48) and the required test matrix (T1–T26)
 - [docs/naming.md](docs/naming.md) — the rename research (`langecs` is a working title)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, commands, repo conventions
 

@@ -55,6 +55,7 @@ event-stream demo (live tokens, step logging, error events).
 | [hello-world](hello-world/) | A chat agent from raw parts — one component, one tag, one system; the reply appends, the tag is removed, quiescence ends the run, and conversation memory is just state that never went anywhere | `pnpm -C examples hello-world` |
 | [order-pipeline](order-pipeline/) | A no-LLM workflow engine — five orders flow through stage components concurrently, one fails and is healed by the stdlib `retry` system while the others keep advancing in the same steps | `pnpm -C examples order-pipeline` |
 | [tools-from-scratch](tools-from-scratch/) | The tool loop demystified — `think` ↔ `act` built by hand with no loop construct, so `reactAgent` stops being magic (self-writes never retrigger; a foreign append is the return edge) | `pnpm -C examples tools-from-scratch` |
+| [devtools-demo](devtools-demo/) | The whole world on screen — the [`@langecs/devtools`](../packages/devtools) inspector plus OpenTelemetry traces on a seeded support desk: edit components live, approve a refund interrupt, watch retry heal a failure, time-travel; **no API key needed** (run `pnpm build` once first for the UI) | `pnpm -C examples devtools-demo` |
 
 ## Real-world workflows
 

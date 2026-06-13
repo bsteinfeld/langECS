@@ -290,10 +290,15 @@ v1 scope — all four:
    timings, errors, conflicts. Ships with a pretty console printer. Foundation for
    time-travel debugging.
 4. **OTel export + visual world inspector** — in v1 by explicit choice, **sequenced
-   after the example ports**, and both built strictly as *consumers of the flight-
-   recorder trace format* (no bespoke plumbing). The trace format is therefore a v1
-   design surface. The inspector (watch components flow between agents, step slider /
-   time travel) is a long-term differentiator.
+   after the example ports**. Shipped as `@langecs/otel` and `@langecs/devtools`,
+   built on a small first-class observer surface (SPEC §14: `world.observe` event
+   tap + external-change notifications + system-run middleware, plus read-only
+   introspection) rather than only the trace format — the middleware hook is what
+   makes OTel async-context propagation (model spans nested under system spans)
+   possible at all. Observers are isolated by contract (R45): they can never alter
+   a run's outcome, so the no-bespoke-plumbing spirit holds — the engine still
+   doesn't know what OTel or a GUI is. The inspector (watch components flow between
+   agents, live editing, step history / time travel) is a long-term differentiator.
 
 ---
 

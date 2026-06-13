@@ -15,8 +15,15 @@ import {
   WorldRunningError,
   WriteConflictError,
 } from './errors';
-import type { ChangeRecord, PairRef, Run, RunResult, RunStatus } from './events';
+import type { ChangeRecord, PairRef, Run, RunEvent, RunResult, RunStatus } from './events';
 import { RunStream } from './events';
+import type {
+  ExternalChange,
+  ObserverEvent,
+  SystemInfo,
+  SystemRunInfo,
+  WorldObserver,
+} from './observe';
 import type { PersistenceAdapter } from './persistence';
 import type { ResourceRef } from './resource';
 import type { Snapshot } from './snapshot';
@@ -35,6 +42,13 @@ import type { DroppedWrite, StepTrace, TraceRun } from './trace';
 
 const perf = (globalThis as { performance?: { now(): number } }).performance;
 const now: () => number = perf ? () => perf.now() : () => Date.now();
+
+// `console` is allowed but not assumed (R1): observer faults are reported,
+// never thrown (R45), and a console-less runtime just drops the report.
+// Resolved at call time so test spies and runtime console swaps are honored.
+const report = (...args: unknown[]): void => {
+  (globalThis as { console?: { error?: (...a: unknown[]) => void } }).console?.error?.(...args);
+};
 
 const nativeStructuredClone = (globalThis as { structuredClone?: <T>(value: T) => T })
   .structuredClone;
@@ -64,6 +78,8 @@ export interface World {
   readonly id: string;
   /** Committed step counter; increments at each barrier commit (R25), restored by `load` (R36). */
   readonly step: number;
+  /** Whether a run is in flight (R47) — external mutation throws while `true` (R16). */
+  readonly running: boolean;
   /**
    * Creates an entity from component inits and/or `AgentDef` bundles (R14).
    * Agent bundles apply their components plus the `agent:<name>` auto-tag and
@@ -156,6 +172,24 @@ export interface World {
    * with `formatTrace(steps)`.
    */
   getTrace(): StepTrace[];
+  /**
+   * Attaches an observer (R45): a passive `onEvent` tap on every run's event
+   * stream (plus the observer-only `run:reject`), `onExternalChange` for idle
+   * mutations and registration changes (R48), and the `wrapSystemRun`
+   * middleware around pair execution (R46). Observer callbacks can never
+   * affect engine semantics — `onEvent`/`onExternalChange` exceptions are
+   * caught and reported via `console.error`. Returns a detach function
+   * (idempotent).
+   */
+  observe(observer: WorldObserver): () => void;
+  /**
+   * Lists registered systems with their effective queries (R47): global
+   * systems and agent-scoped systems (keyed `<agentName>:<systemName>`, query
+   * narrowed by the auto-tag), in registration order.
+   */
+  systems(): SystemInfo[];
+  /** Names of registered resources, sorted (R47). Values are never exposed (R18). */
+  resources(): string[];
 }
 
 interface RegisteredSystem {
@@ -164,6 +198,8 @@ interface RegisteredSystem {
   query: readonly QueryTerm[];
   positives: Set<string>;
   index: number;
+  /** Owning agent for scoped systems (R34) — introspection only (R47). */
+  agent?: string;
 }
 
 type BufferOp =
@@ -217,16 +253,17 @@ class WorldImpl implements World {
   private stepCount = 0;
   private nextEntityId = 1;
   private entities = new Map<number, Map<string, unknown>>();
-  private readonly systems: RegisteredSystem[] = [];
+  private readonly systemList: RegisteredSystem[] = [];
   private readonly systemsByKey = new Map<string, RegisteredSystem>();
-  private readonly resources = new Map<string, unknown>();
+  private readonly resourceMap = new Map<string, unknown>();
   /** systemKey -> entityId -> reason. The "pending pairs" of R26/R35. */
   private dirt = new Map<string, Map<number, string>>();
   /** Match set per system as of the last commit point (newly-matched detection). */
   private matched = new Map<string, Set<number>>();
-  private running = false;
+  private runInFlight = false;
   private traceBuf: StepTrace[] = [];
   private runCounter = 0;
+  private readonly observers: WorldObserver[] = [];
 
   constructor(opts?: WorldOptions) {
     this.id = opts?.id ?? 'world';
@@ -241,10 +278,69 @@ class WorldImpl implements World {
     return this.stepCount;
   }
 
+  get running(): boolean {
+    return this.runInFlight;
+  }
+
   // ---------------------------------------------------------------- helpers
 
   private assertIdle(operation: string): void {
-    if (this.running) throw new WorldRunningError(operation);
+    if (this.runInFlight) throw new WorldRunningError(operation);
+  }
+
+  // ------------------------------------------------------------- observers
+
+  observe(observer: WorldObserver): () => void {
+    this.observers.push(observer);
+    // Per-registration idempotency (R45): without the flag, double-calling
+    // one detach would remove a SECOND registration of the same observer.
+    let detached = false;
+    return () => {
+      if (detached) return;
+      detached = true;
+      const at = this.observers.indexOf(observer);
+      if (at !== -1) this.observers.splice(at, 1);
+    };
+  }
+
+  /** Observer isolation (R45): callbacks can never affect engine semantics. */
+  private notifyEvent(event: ObserverEvent, runId: string): void {
+    if (this.observers.length === 0) return;
+    const info = { worldId: this.id, runId };
+    for (const observer of [...this.observers]) {
+      try {
+        observer.onEvent?.(event, info);
+      } catch (err) {
+        report('[langecs] observer onEvent threw (ignored, R45):', err);
+      }
+    }
+  }
+
+  private notifyExternal(change: ExternalChange): void {
+    for (const observer of [...this.observers]) {
+      try {
+        observer.onExternalChange?.(change);
+      } catch (err) {
+        report('[langecs] observer onExternalChange threw (ignored, R45):', err);
+      }
+    }
+  }
+
+  /**
+   * Composes observers' `wrapSystemRun` middlewares around one pair's run
+   * (R46): first-registered outermost. The composed wrapper's rejection is
+   * treated by the caller exactly like the system throwing (R31).
+   */
+  private wrapPairRun(info: SystemRunInfo, fn: () => Promise<void>): Promise<void> {
+    let next = fn;
+    for (let i = this.observers.length - 1; i >= 0; i--) {
+      const observer = this.observers[i];
+      const wrap = observer?.wrapSystemRun;
+      if (!wrap) continue;
+      const inner = next;
+      next = () => wrap.call(observer, info, inner);
+    }
+    return next();
   }
 
   private matchesQuery(query: readonly QueryTerm[], comps: Map<string, unknown>): boolean {
@@ -277,7 +373,7 @@ class WorldImpl implements World {
    * foreign writer (anyone but the pair itself; 'engine'/'external' count).
    */
   private refreshDirt(changes: AttributedChange[]): void {
-    for (const sys of this.systems) {
+    for (const sys of this.systemList) {
       const prev = this.matched.get(sys.key) ?? new Set<number>();
       const next = new Set<number>();
       for (const [id, comps] of this.entities) {
@@ -334,20 +430,25 @@ class WorldImpl implements World {
     if (isAgentDef(def)) this.registerAgent(def);
     else this.registerSystemInternal(def.name, def, def.query);
     this.refreshDirt([]);
+    this.notifyExternal({ kind: 'systems' });
   }
 
   register<T>(ref: ResourceRef<T>, value: NoInfer<T>): void;
   register(name: string, resource: unknown): void;
   register(nameOrRef: string | ResourceRef<unknown>, resource: unknown): void {
-    this.resources.set(resourceNameOf(nameOrRef), resource);
+    const name = resourceNameOf(nameOrRef);
+    this.resourceMap.set(name, resource);
+    this.notifyExternal({ kind: 'resource', name });
   }
 
   private registerAgent(agent: AgentDef): void {
     for (const sysDef of agent.systems) {
-      this.registerSystemInternal(`${agent.name}:${sysDef.name}`, sysDef, [
-        agent.tag,
-        ...sysDef.query,
-      ]);
+      this.registerSystemInternal(
+        `${agent.name}:${sysDef.name}`,
+        sysDef,
+        [agent.tag, ...sysDef.query],
+        agent.name,
+      );
     }
   }
 
@@ -355,6 +456,7 @@ class WorldImpl implements World {
     key: string,
     def: SystemDef<any>,
     query: readonly QueryTerm[],
+    agent?: string,
   ): void {
     const existing = this.systemsByKey.get(key);
     if (existing) {
@@ -365,10 +467,36 @@ class WorldImpl implements World {
     for (const term of query) {
       if (isComponentType(term)) positives.add(term.componentName);
     }
-    const reg: RegisteredSystem = { key, def, query, positives, index: this.systems.length };
-    this.systems.push(reg);
+    const reg: RegisteredSystem = { key, def, query, positives, index: this.systemList.length };
+    if (agent !== undefined) reg.agent = agent;
+    this.systemList.push(reg);
     this.systemsByKey.set(key, reg);
     this.matched.set(key, new Set());
+  }
+
+  // ------------------------------------------------------------ introspection
+
+  systems(): SystemInfo[] {
+    return this.systemList.map((sys) => {
+      const include: string[] = [];
+      const exclude: string[] = [];
+      for (const term of sys.query) {
+        if (isComponentType(term)) include.push(term.componentName);
+        else exclude.push(term.not.componentName);
+      }
+      const info: SystemInfo = {
+        key: sys.key,
+        name: sys.def.name,
+        query: { include, exclude },
+        hasGuard: sys.def.when !== undefined,
+      };
+      if (sys.agent !== undefined) info.agent = sys.agent;
+      return info;
+    });
+  }
+
+  resources(): string[] {
+    return [...this.resourceMap.keys()].sort();
   }
 
   // ------------------------------------------------------ external mutations
@@ -380,6 +508,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.applySpawnItems(id, items, changes, 'external');
     this.refreshDirt(changes);
+    this.notifyExternal({ kind: 'spawn', entity: id });
     return this.externalHandle(id);
   }
 
@@ -420,6 +549,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.commitWrite(id, component, value, op, 'external', changes);
     this.refreshDirt(changes);
+    this.notifyExternal({ kind: 'write', entity: id, component: component.componentName });
   }
 
   private externalRemove(id: number, component: ComponentType<any>): void {
@@ -432,6 +562,7 @@ class WorldImpl implements World {
     this.refreshDirt([
       { record: { entity: id, component: name, kind: 'remove' }, writer: 'external' },
     ]);
+    this.notifyExternal({ kind: 'remove', entity: id, component: name });
   }
 
   private externalDespawn(id: number): void {
@@ -440,6 +571,7 @@ class WorldImpl implements World {
     this.entities.delete(id);
     for (const entityMap of this.dirt.values()) entityMap.delete(id);
     for (const matchSet of this.matched.values()) matchSet.delete(id);
+    this.notifyExternal({ kind: 'despawn', entity: id });
   }
 
   private externalHandle(id: number): EntityHandle {
@@ -511,18 +643,28 @@ class WorldImpl implements World {
   // ------------------------------------------------------------------- runs
 
   run(opts?: { limit?: number }): Run {
-    if (this.running) throw new WorldRunningError('start a second run');
-    this.running = true;
+    if (this.runInFlight) throw new WorldRunningError('start a second run');
+    this.runInFlight = true;
+    const runId = `${this.id}:run-${++this.runCounter}`;
     const stream = new RunStream();
-    stream.emit({ type: 'run:start', runId: `${this.id}:run-${++this.runCounter}` });
-    this.driveLoop(stream, opts?.limit ?? this.recursionLimit).then(
+    // Every stream emission also reaches observers (R45) — a passive tap,
+    // independent of whether anyone iterates the Run.
+    const emit = (event: RunEvent): void => {
+      stream.emit(event);
+      this.notifyEvent(event, runId);
+    };
+    emit({ type: 'run:start', runId });
+    this.driveLoop(emit, opts?.limit ?? this.recursionLimit, runId).then(
       (result) => {
-        this.running = false;
-        stream.emit({ type: 'run:end', status: result.status, steps: result.steps });
+        this.runInFlight = false;
+        emit({ type: 'run:end', status: result.status, steps: result.steps });
         stream.resolve(result);
       },
       (err) => {
-        this.running = false;
+        this.runInFlight = false;
+        // A rejected run emits no run:end (R40); observers get the
+        // observer-only run:reject instead (R45) so they can close out.
+        this.notifyEvent({ type: 'run:reject', error: serializeError(err) }, runId);
         stream.reject(err);
       },
     );
@@ -542,7 +684,11 @@ class WorldImpl implements World {
     return this.run();
   }
 
-  private async driveLoop(stream: RunStream, limit: number): Promise<RunResult> {
+  private async driveLoop(
+    emit: (event: RunEvent) => void,
+    limit: number,
+    runId: string,
+  ): Promise<RunResult> {
     let steps = 0;
     let limitHit = false;
 
@@ -551,7 +697,7 @@ class WorldImpl implements World {
 
       // 1. Candidates: matched ∩ dirty, in (system registration index, entity id) order.
       const candidates: { sys: RegisteredSystem; entity: number }[] = [];
-      for (const sys of this.systems) {
+      for (const sys of this.systemList) {
         const dirtMap = this.dirt.get(sys.key);
         if (!dirtMap || dirtMap.size === 0) continue;
         const matchSet = this.matched.get(sys.key);
@@ -591,13 +737,13 @@ class WorldImpl implements World {
               continue;
             }
           } catch (err) {
-            const exec = this.makeExec(c.sys, c.entity, stepNo, stream);
+            const exec = this.makeExec(c.sys, c.entity, stepNo, emit);
             exec.error = serializeError(err);
             execs.push(exec);
             continue;
           }
         }
-        execs.push(this.makeExec(c.sys, c.entity, stepNo, stream));
+        execs.push(this.makeExec(c.sys, c.entity, stepNo, emit));
       }
 
       // Quiescent-by-veto: every candidate vetoed. No barrier runs; the veto
@@ -620,7 +766,7 @@ class WorldImpl implements World {
       // 4. Execute all eligible pairs concurrently. (Dirt for executed and
       // vetoed pairs is consumed only when the barrier commits, R26 amended.)
       steps += 1;
-      stream.emit({
+      emit({
         type: 'step:start',
         step: stepNo,
         scheduled: execs.map((x) => ({ system: x.sys.key, entity: x.entity })),
@@ -631,13 +777,13 @@ class WorldImpl implements World {
           if (exec.error) {
             // `when` already threw; report it like a failed run — with the
             // system:start/system:error pairing intact (R41 amended).
-            stream.emit({
+            emit({
               type: 'system:start',
               step: stepNo,
               system: exec.sys.key,
               entity: exec.entity,
             });
-            stream.emit({
+            emit({
               type: 'system:error',
               step: stepNo,
               system: exec.sys.key,
@@ -646,17 +792,39 @@ class WorldImpl implements World {
             });
             return;
           }
-          stream.emit({
+          emit({
             type: 'system:start',
             step: stepNo,
             system: exec.sys.key,
             entity: exec.entity,
           });
           const start = now();
+          // The system's own failure is tracked out-of-band so a misbehaving
+          // wrapper that SWALLOWS fn's rejection (violating R46) can never
+          // turn a throwing system into a success — which would commit a
+          // partial buffer (R31) and bogusly auto-clear SystemError (R32).
+          let ownFailure = false;
+          let ownError: unknown;
           try {
-            await exec.sys.def.run(exec.view, exec.ctx);
+            // Observer middleware around the pair's run (R46); an async-only
+            // thunk so a synchronously-throwing system still surfaces as a
+            // rejection to wrappers. A wrapper rejection lands here like a
+            // system throw (R31).
+            await this.wrapPairRun(
+              { worldId: this.id, runId, step: stepNo, system: exec.sys.key, entity: exec.entity },
+              async () => {
+                try {
+                  await exec.sys.def.run(exec.view, exec.ctx);
+                } catch (err) {
+                  ownFailure = true;
+                  ownError = err;
+                  throw err;
+                }
+              },
+            );
+            if (ownFailure) throw ownError;
             exec.ms = now() - start;
-            stream.emit({
+            emit({
               type: 'system:end',
               step: stepNo,
               system: exec.sys.key,
@@ -667,7 +835,7 @@ class WorldImpl implements World {
             exec.ms = now() - start;
             exec.error = serializeError(err);
             exec.ops = []; // discard the buffer entirely (R31)
-            stream.emit({
+            emit({
               type: 'system:error',
               step: stepNo,
               system: exec.sys.key,
@@ -710,7 +878,7 @@ class WorldImpl implements World {
       if (outcome.dropped.length > 0) trace.droppedWrites = outcome.dropped;
       this.pushTrace(trace);
 
-      stream.emit({
+      emit({
         type: 'step:applied',
         step: stepNo,
         changes: changeRecords,
@@ -754,8 +922,8 @@ class WorldImpl implements World {
   /** Refs and plain names address the same slot (R18 amended). */
   private lookupResource<T>(nameOrRef: string | ResourceRef<T>): T {
     const name = resourceNameOf(nameOrRef);
-    if (!this.resources.has(name)) throw new MissingResourceError(name);
-    return this.resources.get(name) as T;
+    if (!this.resourceMap.has(name)) throw new MissingResourceError(name);
+    return this.resourceMap.get(name) as T;
   }
 
   /** Restricted, mutator-free context handed to `when` guards (R21 amended). */
@@ -771,7 +939,7 @@ class WorldImpl implements World {
     sys: RegisteredSystem,
     entity: number,
     stepNo: number,
-    stream: RunStream,
+    emit: (event: RunEvent) => void,
   ): PairExec {
     const ops: BufferOp[] = [];
     const exec = { sys, entity, ops, ms: 0 } as PairExec;
@@ -794,7 +962,7 @@ class WorldImpl implements World {
         exec.ops.push({ kind: 'remove', entity: resolveTarget(target), component });
       },
       emit: (data) => {
-        stream.emit({ type: 'custom', step: stepNo, system: sys.key, entity, data });
+        emit({ type: 'custom', step: stepNo, system: sys.key, entity, data });
       },
       resource: <T>(nameOrRef: string | ResourceRef<T>): T => this.lookupResource(nameOrRef),
       invalidate: (target, system) => {
@@ -1131,7 +1299,7 @@ class WorldImpl implements World {
     let resolvable: Set<string> | undefined;
     const buildResolvable = (): Set<string> => {
       const names = new Set<string>();
-      for (const sys of this.systems) {
+      for (const sys of this.systemList) {
         names.add(sys.key);
         names.add(sys.def.name);
       }
@@ -1162,7 +1330,7 @@ class WorldImpl implements World {
 
   private applyInvalidate(entity: number, systemName: string | undefined): void {
     if (systemName === undefined) {
-      for (const sys of this.systems) this.markDirt(sys.key, entity, 'invalidate');
+      for (const sys of this.systemList) this.markDirt(sys.key, entity, 'invalidate');
       return;
     }
     const exact = this.systemsByKey.get(systemName);
@@ -1170,7 +1338,7 @@ class WorldImpl implements World {
       this.markDirt(exact.key, entity, 'invalidate');
       return;
     }
-    const byName = this.systems.filter((s) => s.def.name === systemName);
+    const byName = this.systemList.filter((s) => s.def.name === systemName);
     if (byName.length === 0) throw new UnknownSystemError([systemName]);
     for (const sys of byName) this.markDirt(sys.key, entity, 'invalidate');
   }
@@ -1203,7 +1371,7 @@ class WorldImpl implements World {
       return { id, components: record };
     });
     const pendingPairs: { entity: number; system: string; reason: string }[] = [];
-    for (const sys of this.systems) {
+    for (const sys of this.systemList) {
       const entityMap = this.dirt.get(sys.key);
       if (!entityMap) continue;
       for (const [entity, reason] of [...entityMap.entries()].sort((a, b) => a[0] - b[0])) {
@@ -1260,13 +1428,14 @@ class WorldImpl implements World {
     // Match sets reflect the restored committed state; no dirt is generated so
     // the loaded world continues identically from the boundary (R36).
     this.matched = new Map();
-    for (const sys of this.systems) {
+    for (const sys of this.systemList) {
       const matchSet = new Set<number>();
       for (const [id, comps] of this.entities) {
         if (this.matchesQuery(sys.query, comps)) matchSet.add(id);
       }
       this.matched.set(sys.key, matchSet);
     }
+    this.notifyExternal({ kind: 'load' });
   }
 }
 

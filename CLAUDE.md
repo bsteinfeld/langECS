@@ -10,7 +10,7 @@ acceptance gate.
 ## Authority order
 
 For engine semantics: **SPEC.md > DESIGN.md**. SPEC.md is the contract with numbered
-requirements (R1…R44) and the required test matrix (T1–T22); DESIGN.md records *why*.
+requirements (R1…R48) and the required test matrix (T1–T26); DESIGN.md records *why*.
 Code conforming to SPEC wins disputes. Cite requirement numbers when touching the engine.
 
 ## Commands
@@ -52,6 +52,10 @@ directly — no build step needed for dev.
 - `packages/stdlib` — standard components/systems + ReAct preset
 - `packages/ai-sdk`, `packages/langchain` — model adapters (Vercel AI SDK / LangChain.js)
 - `packages/persist-fs` — filesystem persistence adapter
+- `packages/otel` — OpenTelemetry bridge over `world.observe` (SPEC §14); peer-deps only
+  `@opentelemetry/api`, GenAI semconv for model/tool spans
+- `packages/devtools` — inspector GUI: Node server (WS + OTLP/HTTP JSON receiver at
+  `/v1/traces`) + React UI (`ui/`, built to `dist/ui` via Vite); idle-only mutation (R16)
 - `examples/` — the six v1-gating LangGraph ports; `examples/_shared/env.ts` loads
   `.env.local`
 
