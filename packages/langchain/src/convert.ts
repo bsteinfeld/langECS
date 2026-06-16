@@ -76,6 +76,33 @@ export function toLangChainTools(tools: ToolSpec[]): LangChainToolParams[] {
   }));
 }
 
+/**
+ * Pull reasoning / "thinking" text out of a LangChain AI message, covering the
+ * two shapes providers use: a `reasoning_content` string on `additional_kwargs`
+ * (DeepSeek-R1 style) and `thinking`/`reasoning` content blocks (Anthropic
+ * extended thinking). Returns `undefined` when there is none.
+ */
+function extractThinking(message: AIMessage | AIMessageChunk): string | undefined {
+  const parts: string[] = [];
+  const kwargs = message.additional_kwargs as Record<string, unknown> | undefined;
+  const reasoningContent = kwargs?.reasoning_content;
+  if (typeof reasoningContent === 'string' && reasoningContent.length > 0) {
+    parts.push(reasoningContent);
+  }
+  if (Array.isArray(message.content)) {
+    for (const block of message.content as {
+      type?: string;
+      thinking?: unknown;
+      text?: unknown;
+    }[]) {
+      if (block.type !== 'thinking' && block.type !== 'reasoning') continue;
+      const text = typeof block.thinking === 'string' ? block.thinking : block.text;
+      if (typeof text === 'string' && text.length > 0) parts.push(text);
+    }
+  }
+  return parts.length > 0 ? parts.join('') : undefined;
+}
+
 /** Convert a LangChain AI message (or accumulated stream chunk) back into a core `Msg`. */
 export function fromLangChainMessage(message: AIMessage | AIMessageChunk): Msg {
   const toolCalls = (message.tool_calls ?? []).map((tc, index) => ({
@@ -83,9 +110,11 @@ export function fromLangChainMessage(message: AIMessage | AIMessageChunk): Msg {
     name: tc.name,
     args: tc.args as unknown,
   }));
+  const thinking = extractThinking(message);
   return {
     role: 'assistant',
     content: message.text,
+    ...(thinking !== undefined ? { thinking } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }

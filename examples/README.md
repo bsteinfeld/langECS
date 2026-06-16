@@ -1,11 +1,13 @@
 # Examples
 
-Thirteen runnable examples, organized as a learning path: three minimal
-starters, three real-world workflows, three multi-agent patterns, and the six
-LangGraph.js ports that gated the v1 experiment — each port's README contains a
-deliberately honest side-by-side comparison with the original, including where
-the original wins. If you're coming from LangGraph.js, read
-[the concept map](../docs/langgraph-comparison.md) first.
+Sixteen runnable examples, organized as a learning path: minimal starters,
+real-world workflows, multi-agent patterns, and the six LangGraph.js ports that
+gated the v1 experiment — each port's README contains a deliberately honest
+side-by-side comparison with the original, including where the original wins.
+If you're coming from LangGraph.js, read
+[the concept map](../docs/langgraph-comparison.md) first; for the patterns these
+examples share (fan-out/fan-in, reducer-merge, supervisor, reflection…) see
+[PATTERNS.md](PATTERNS.md).
 
 Each example has the same shape:
 
@@ -64,6 +66,8 @@ event-stream demo (live tokens, step logging, error events).
 | [support-desk](support-desk/) | Entities as work items, systems as workers: four tickets triaged in one concurrent step, routed by `when` guards, with per-ticket `AwaitingHuman` escalation that blocks nobody else; `extractJson` for typed triage | `pnpm -C examples support-desk` |
 | [content-pipeline](content-pipeline/) | A staged blog-post pipeline with no orchestrator or edges: `ctx.spawn` fan-out to one `Section` entity per heading, all drafted in a single step, fan-in via an append reducer and a count guard | `pnpm -C examples content-pipeline` |
 | [code-review-crew](code-review-crew/) | Three reviewer systems share one query, so a single send fans out to three parallel model calls; the step barrier is the join — `Findings` can't be deduped until every reviewer's append commits | `pnpm -C examples code-review-crew` |
+| [rag-qa](rag-qa/) | Retrieval-Augmented Generation as a pipeline: `extractJson` decomposes the question into sub-queries, one retriever entity is spawned per query and they all run in parallel, and an append reducer fans their passages back in before a grounded, cited answer | `pnpm -C examples rag-qa` |
+| [context-window](context-window/) | Keep a long conversation under a token budget with one line — `withMessageWindow` trims what each model call sees while the full transcript stays durable state; shows the honest memory trade-off | `pnpm -C examples context-window` |
 
 ## Multi-agent
 
@@ -109,9 +113,10 @@ graph is zero lines. [Full comparison →](sql-agent/README.md)
 **supervisor — better than the original at the mechanics this pattern is
 about.** Parallel dispatch in one step, deterministic `Inbox` fan-in,
 mid-run spawning, and crash-as-queryable-state are all natural ECS moves —
-impossible or restructure-required in the compiled graph. It loses on routing
-ergonomics (our supervisor hand-parses raw JSON), flow legibility, and
-ecosystem. [Full comparison →](supervisor/README.md)
+impossible or restructure-required in the compiled graph. Routing is now typed
+and validated via stdlib `extractJson` (a schema + a one-shot retry, no
+hand-parsing); it still loses on flow legibility and ecosystem.
+[Full comparison →](supervisor/README.md)
 
 **reflection — the dirty-triggering showcase.** The writer↔critic cycle that
 LangGraph needs three edges and a counting router for is simply what the

@@ -86,3 +86,29 @@ export interface SystemInfo {
   /** Whether the system has a `when` guard. */
   hasGuard: boolean;
 }
+
+/**
+ * Per-system run statistics aggregated from the flight recorder, as reported by
+ * `world.queryStats()`. Diagnostic only — `matchCount` reflects committed state
+ * right now, while `runCount`/`errorCount`/`totalMs`/`lastStepFired` cover only
+ * the steps still retained in the trace ring buffer (so they reset to 0 when
+ * the world is created with `trace: false`).
+ */
+export interface QueryStat {
+  /** Registration key — `<agentName>:<systemName>` for agent-scoped systems. */
+  key: string;
+  /** The definition's own name. */
+  name: string;
+  /** Owning agent, for systems registered via an `AgentDef`. */
+  agent?: string;
+  /** Entities currently matching the system's query (committed state). */
+  matchCount: number;
+  /** Times the system's `run` executed across the retained trace. */
+  runCount: number;
+  /** Of those runs, how many threw. */
+  errorCount: number;
+  /** Total run wall-time (ms) across the retained trace. */
+  totalMs: number;
+  /** Highest step at which the system ran within the retained trace, if any. */
+  lastStepFired?: number;
+}

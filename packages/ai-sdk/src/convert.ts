@@ -82,9 +82,13 @@ export function toAiSdkTools(specs: ToolSpec[] | undefined): ToolSet | undefined
   return tools;
 }
 
-/** Build the assistant `Msg` of a `ModelResult` from AI SDK text + tool calls. */
-export function toAssistantMsg(text: string, toolCalls: AiSdkToolCall[]): Msg {
+/**
+ * Build the assistant `Msg` of a `ModelResult` from AI SDK text, tool calls,
+ * and optional reasoning text (mapped to `Msg.thinking` for reasoning models).
+ */
+export function toAssistantMsg(text: string, toolCalls: AiSdkToolCall[], reasoning?: string): Msg {
   const msg: Msg = { role: 'assistant', content: text };
+  if (reasoning !== undefined && reasoning.length > 0) msg.thinking = reasoning;
   if (toolCalls.length > 0) {
     msg.toolCalls = toolCalls.map((call) => ({
       id: call.toolCallId,

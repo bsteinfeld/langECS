@@ -1,12 +1,33 @@
 {
   "name": "@langecs/devtools",
   "version": "0.1.0",
-  "type": "module",
   "description": "Visual inspector for LangECS worlds — live entity/component state, interactive mutation, flight-recorder timeline, OTLP trace waterfall, human-in-the-loop",
   "license": "MIT",
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/langecs/langecs.git",
+    "directory": "packages/devtools"
+  },
+  "bugs": "https://github.com/langecs/langecs/issues",
+  "homepage": "https://github.com/langecs/langecs/tree/main/packages/devtools#readme",
+  "keywords": [
+    "llm",
+    "agents",
+    "ai",
+    "agent-framework",
+    "ecs",
+    "entity-component-system",
+    "typescript",
+    "devtools",
+    "inspector",
+    "debugging",
+    "observability"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

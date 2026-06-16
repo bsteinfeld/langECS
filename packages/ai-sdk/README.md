@@ -41,10 +41,13 @@ type includes those.
   (system/user/assistant-with-tool-call-parts/tool-result), `ToolSpec[]` converts to an
   AI SDK `ToolSet` via `jsonSchema()`. The tools carry **no `execute` function** — a
   single model step returns tool calls to the engine unexecuted, because tool execution
-  belongs to the world (stdlib `executeTools`), not the SDK. `temperature` and
-  `maxTokens` (→ `maxOutputTokens`) pass through; usage and `finishReason` map back;
-  `raw` carries the original SDK result.
+  belongs to the world (stdlib `executeTools`), not the SDK. Sampling controls pass
+  through when set — `temperature`, `maxTokens` (→ `maxOutputTokens`), `topP`, `topK`,
+  `frequencyPenalty`, `presencePenalty`, `seed`, `stopSequences`; usage and
+  `finishReason` map back; `raw` carries the original SDK result. Reasoning models'
+  thinking is captured into `Msg.thinking` (from the SDK's reasoning output).
 - **`stream()` → `streamText`.** Text deltas are forwarded to `onChunk` as they arrive;
+  reasoning deltas are accumulated into `Msg.thinking` (not forwarded as answer text);
   tool calls and usage are collected from the full stream; the resolved `ModelResult`
   has the same shape as `generate()`. Stream errors are re-thrown (they surface as a
   failing system in the world, i.e. a `SystemError` record — not a crash).

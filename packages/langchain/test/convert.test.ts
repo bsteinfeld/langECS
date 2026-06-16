@@ -143,6 +143,34 @@ describe('fromLangChainMessage', () => {
     );
     expect(msg.content).toBe('Hello world');
   });
+
+  it('captures reasoning_content (DeepSeek style) into Msg.thinking', () => {
+    const msg = fromLangChainMessage(
+      new AIMessage({
+        content: 'answer',
+        additional_kwargs: { reasoning_content: 'step by step' },
+      }),
+    );
+    expect(msg.content).toBe('answer');
+    expect(msg.thinking).toBe('step by step');
+  });
+
+  it('captures thinking content blocks (Anthropic style) into Msg.thinking', () => {
+    const msg = fromLangChainMessage(
+      new AIMessage({
+        content: [
+          { type: 'thinking', thinking: 'let me reason' },
+          { type: 'text', text: 'final answer' },
+        ],
+      }),
+    );
+    expect(msg.content).toBe('final answer');
+    expect(msg.thinking).toBe('let me reason');
+  });
+
+  it('omits thinking when there is no reasoning', () => {
+    expect(fromLangChainMessage(new AIMessage('plain')).thinking).toBeUndefined();
+  });
 });
 
 describe('toModelResult', () => {

@@ -59,5 +59,15 @@ honestly. Recommendation: **publish — after three gates**, in priority order:
    (replacing stringly-typed `'model:main'` / `'tool:sql'`) and a structured-output
    routing helper in stdlib (the supervisor port's self-described weakest part).
 
+> **Progress (post-verdict).** Gate 3 is done: typed resource references shipped
+> as `defineResource` (R18 amended), and structured output landed in stdlib as
+> `extractJson` (with a `validate` hook for Zod/Valibot) plus `routeJson` for
+> type-safe dispatch — the supervisor port now routes through them, retiring its
+> hand-parser. Gate 2's docs half is in: a trace-first
+> [debugging guide](guides/debugging-systems.md) and forward introspection
+> (`world.systemsMatching`, `world.queryStats`) make the emergent control flow
+> legible; the [`@langecs/devtools`](../packages/devtools) inspector is the
+> interactive complement. Gate 1 (rename) remains the maintainer's call.
+
 The six comparison READMEs concede real losses by name and should ship as-is — the
 honesty is the credibility. The final publish/no-publish call is the maintainer's.

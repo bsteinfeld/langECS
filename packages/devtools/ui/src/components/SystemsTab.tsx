@@ -4,7 +4,7 @@
 import type { PendingPair } from '@langecs/core';
 import { Fragment, useMemo, useState } from 'react';
 import { formatMs } from '../format';
-import { lastRunBySystem, matchedEntities, useStore } from '../store';
+import { lastRunBySystem, matchedEntities, runStatsBySystem, useStore } from '../store';
 import { EmptyState } from './EmptyState';
 import { AlertIcon, ChevronIcon } from './icons';
 
@@ -30,6 +30,7 @@ export function SystemsTab() {
   }, [world]);
 
   const lastRuns = useMemo(() => lastRunBySystem(state.trace), [state.trace]);
+  const runStats = useMemo(() => runStatsBySystem(state.trace), [state.trace]);
 
   if (!world || world.systems.length === 0) {
     return (
@@ -55,6 +56,7 @@ export function SystemsTab() {
             <th>Query</th>
             <th className="num">Matched</th>
             <th className="num">Dirty</th>
+            <th className="num">Runs</th>
             <th>Last run</th>
           </tr>
         </thead>
@@ -63,6 +65,7 @@ export function SystemsTab() {
             const matched = matches.get(sys.key) ?? [];
             const pending = pendingBySystem.get(sys.key) ?? [];
             const last = lastRuns.get(sys.key);
+            const stats = runStats.get(sys.key);
             const open = expanded === sys.key;
             return (
               <Fragment key={sys.key}>
@@ -103,6 +106,21 @@ export function SystemsTab() {
                   <td className="num">
                     {pending.length > 0 ? (
                       <span className="dirty-count">{pending.length}</span>
+                    ) : (
+                      <span className="dim">0</span>
+                    )}
+                  </td>
+                  <td className="num">
+                    {stats ? (
+                      <span title={`${stats.runCount} run(s) in the retained trace`}>
+                        {stats.runCount}
+                        {stats.errorCount > 0 && (
+                          <span className="err-count" title={`${stats.errorCount} errored`}>
+                            {' '}
+                            ✕{stats.errorCount}
+                          </span>
+                        )}
+                      </span>
                     ) : (
                       <span className="dim">0</span>
                     )}

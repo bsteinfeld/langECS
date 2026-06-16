@@ -5,6 +5,7 @@
 // reader never observes a partially-written snapshot. `history()`/`loadStep()`
 // work from the directory listing; every read is tolerant of missing dirs.
 
+import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PersistenceAdapter, Snapshot } from '@langecs/core';
@@ -29,11 +30,12 @@ const stepFileName = (step: number): string => `step-${String(step).padStart(6, 
 const isENOENT = (err: unknown): boolean =>
   err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
 
-let tmpSerial = 0;
-
 /** Write `data` to `<dir>/<name>` atomically: unique tmp file in the same dir, then rename. */
 async function writeFileAtomic(dir: string, name: string, data: string): Promise<void> {
-  const tmpPath = join(dir, `.${name}.${process.pid}.${++tmpSerial}.tmp`);
+  // A random tmp name keeps concurrent saves (e.g. multiple workers sharing a
+  // pid, or two worlds writing the same dir) from colliding on the tmp file
+  // and racing the rename.
+  const tmpPath = join(dir, `.${name}.${randomUUID()}.tmp`);
   await writeFile(tmpPath, data, 'utf8');
   await rename(tmpPath, join(dir, name));
 }

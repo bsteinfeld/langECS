@@ -1,12 +1,31 @@
 {
   "name": "@langecs/langchain",
   "version": "0.1.0",
-  "type": "module",
   "description": "LangChain.js model adapter for LangECS — use any LangChain chat model as a LangECS Model",
   "license": "MIT",
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/langecs/langecs.git",
+    "directory": "packages/langchain"
+  },
+  "bugs": "https://github.com/langecs/langecs/issues",
+  "homepage": "https://github.com/langecs/langecs/tree/main/packages/langchain#readme",
+  "keywords": [
+    "llm",
+    "agents",
+    "ai",
+    "agent-framework",
+    "ecs",
+    "entity-component-system",
+    "typescript",
+    "langchain",
+    "model-adapter"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

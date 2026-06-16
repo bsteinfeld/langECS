@@ -317,8 +317,14 @@ interface WorldOptions {
 | `pending` | `() => { entity, interrupts }[]` | Entities with `AwaitingHuman` records, as detached copies. |
 | `resume` | `(target, value: unknown) => Run` | Removes `AwaitingHuman`, sets `HumanResponse({ value })`, runs to quiescence. |
 | `snapshot` | `() => Snapshot` | Sync, JSON-stringifiable, detached. |
-| `load` | `(snapshot: Snapshot) => void` | Restores entities, counters, and pending dirt; discards the previous timeline and clears the trace buffer. |
+| `load` | `(snapshot: Snapshot) => void` | Restores entities, counters, and pending dirt; discards the previous timeline and clears the trace buffer. Throws `SnapshotVersionError` on an unknown version and `DeserializeError` (with entity + component) if a `deserialize` hook fails. |
 | `getTrace` | `() => StepTrace[]` | The flight recorder's ring buffer. |
+| `running` | `readonly boolean` | Whether a run is in flight (external mutation throws while `true`). |
+| `observe` | `(observer: WorldObserver) => () => void` | Attaches an observer (event tap, external-change notifications, system-run middleware); returns an idempotent detach. The integration point for `@langecs/otel` and `@langecs/devtools`. |
+| `systems` | `() => SystemInfo[]` | Registered systems with effective queries (auto-tag included) and scoping, in registration order. |
+| `resources` | `() => string[]` | Registered resource names, sorted (values never exposed). |
+| `systemsMatching` | `(entityId: number) => SystemInfo[]` | Forward introspection: which systems' queries currently match an entity — "what could fire for this entity?" Great for "why isn't my system running?" |
+| `queryStats` | `() => QueryStat[]` | Per-system `matchCount` (live) + `runCount`/`errorCount`/`totalMs`/`lastStepFired` aggregated from the retained trace — "which systems are hot / never fire / keep erroring". |
 
 ### `defineResource<T>(name): ResourceRef<T>`
 
@@ -594,13 +600,17 @@ type Msg = {
   toolCalls?: { id: string; name: string; args: unknown }[];
   toolCallId?: string;
   name?: string;
+  thinking?: string;   // reasoning trace (o1/o3, Claude thinking, R1); output-only, captured by adapters
   meta?: Record<string, unknown>;
 };
 
 type ToolSpec = { name: string; description?: string; parameters?: Record<string, unknown> };
 
 interface ModelRequest { messages: Msg[]; system?: string; tools?: ToolSpec[];
-                         temperature?: number; maxTokens?: number }
+                         temperature?: number; maxTokens?: number;
+                         // additional sampling controls, forwarded by adapters when set:
+                         topP?: number; topK?: number; frequencyPenalty?: number;
+                         presencePenalty?: number; seed?: number; stopSequences?: string[] }
 interface ModelResult  { message: Msg; usage?: { inputTokens?: number; outputTokens?: number };
                          finishReason?: string; raw?: unknown }
 
@@ -638,6 +648,8 @@ All engine errors extend `LangECSError extends Error`.
 | `WorldRunningError` | External mutation, registration, `load`, or a second `run()` while a run is in flight. |
 | `UnknownComponentError` | `load()` meets component names missing from the registry. Field: `componentNames`. |
 | `UnknownSystemError` | `load()` meets unregistered `pendingPairs` systems, or `ctx.invalidate` names an unresolvable system. Field: `systemNames`. |
+| `SnapshotVersionError` | `load()` meets a snapshot whose `version` this build doesn't understand. Fields: `version`, `supported`. |
+| `DeserializeError` | A component's `deserialize` hook throws during `load()`. Fields: `entity`, `component`, `cause`. |
 | `MissingResourceError` | `ctx.resource(name)` with nothing registered under `name`. Field: `resourceName`. |
 | `UnknownEntityError` | An external mutation targets a nonexistent (e.g. despawned) entity. Field: `entity`. |
 

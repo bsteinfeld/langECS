@@ -25,6 +25,14 @@ export function fromAiSdk(model: LanguageModel): Model {
     tools: toAiSdkTools(req.tools),
     temperature: req.temperature,
     maxOutputTokens: req.maxTokens,
+    // Sampling controls (R43): forwarded only when set, so providers that
+    // reject a given knob are never sent an explicit `undefined`.
+    topP: req.topP,
+    topK: req.topK,
+    frequencyPenalty: req.frequencyPenalty,
+    presencePenalty: req.presencePenalty,
+    seed: req.seed,
+    stopSequences: req.stopSequences,
     // Core `Msg[]` may legitimately contain role:'system' entries.
     allowSystemInMessages: true,
   });
@@ -33,7 +41,7 @@ export function fromAiSdk(model: LanguageModel): Model {
     async generate(req: ModelRequest): Promise<ModelResult> {
       const result = await generateText(callOptions(req));
       return {
-        message: toAssistantMsg(result.text, result.toolCalls),
+        message: toAssistantMsg(result.text, result.toolCalls, result.reasoningText),
         usage: toUsage(result.usage),
         finishReason: result.finishReason,
         raw: result,
@@ -45,6 +53,7 @@ export function fromAiSdk(model: LanguageModel): Model {
       // 'error' stream parts and are re-thrown below.
       const result = streamText({ ...callOptions(req), onError: () => {} });
       let text = '';
+      let reasoning = '';
       const toolCalls: AiSdkToolCall[] = [];
       let finishReason: string | undefined;
       let usage: ModelResult['usage'];
@@ -53,6 +62,11 @@ export function fromAiSdk(model: LanguageModel): Model {
           case 'text-delta':
             text += part.text;
             if (part.text.length > 0) onChunk({ text: part.text });
+            break;
+          case 'reasoning-delta':
+            // Reasoning tokens stream too, but are captured into Msg.thinking
+            // rather than forwarded as answer text via onChunk.
+            reasoning += part.text;
             break;
           case 'tool-call':
             toolCalls.push({
@@ -74,7 +88,7 @@ export function fromAiSdk(model: LanguageModel): Model {
         }
       }
       return {
-        message: toAssistantMsg(text, toolCalls),
+        message: toAssistantMsg(text, toolCalls, reasoning.length > 0 ? reasoning : undefined),
         usage,
         finishReason,
         raw: await result.response,

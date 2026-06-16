@@ -43,8 +43,9 @@ result.message; // { role: 'assistant', content: 'hello there' }
 `ModelRequest.system` is prepended as a `SystemMessage`. On the way back,
 `tool_calls` map to `toolCalls`, `usage_metadata` to
 `usage.{inputTokens,outputTokens}`, `finish_reason`/`stop_reason` from
-`response_metadata` to `finishReason`, and `raw` carries the original LangChain
-message.
+`response_metadata` to `finishReason`, reasoning (`reasoning_content` or
+thinking content blocks) to `Msg.thinking`, and `raw` carries the original
+LangChain message.
 
 ## Tool binding
 

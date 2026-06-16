@@ -2,12 +2,14 @@ import { expect, test } from 'vitest';
 import {
   AwaitingHuman,
   createWorld,
+  DeserializeError,
   defineComponent,
   defineSystem,
   HumanResponse,
   MemoryAdapter,
   type Model,
   Not,
+  SnapshotVersionError,
   scriptedModel,
   UnknownComponentError,
   UnknownSystemError,
@@ -270,4 +272,45 @@ test('T19 transient excluded from snapshot; serialize/deserialize hooks roundtri
   expect(restored?.get(Pos)).toEqual({ x: 1, y: 2 });
   expect(restored?.has(Scratch)).toBe(false);
   expect(world2.snapshot()).toEqual(snap);
+});
+
+// ------------------------------------------------------- robustness (R36)
+
+test('load() rejects an unsupported snapshot version, leaving the world untouched', () => {
+  const C = defineComponent<number>({ name: 'verC' });
+  const world = createWorld();
+  world.spawn(C(1));
+  const snap = world.snapshot();
+  const future = { ...snap, version: 2 as unknown as 1 };
+  expect(() => world.load(future)).toThrow(SnapshotVersionError);
+  // The pre-existing timeline survives a rejected load.
+  expect(world.entity(1)?.get(C)).toBe(1);
+});
+
+test('load() wraps a failing deserialize hook with entity + component context', () => {
+  // Registered for its side effect (global registry); referenced by name below.
+  const _Strict = defineComponent<number>({
+    name: 'strictDeser',
+    deserialize: (raw) => {
+      if (typeof raw !== 'number') throw new Error('expected a number');
+      return raw;
+    },
+  });
+  const world = createWorld();
+  let threw: unknown;
+  try {
+    world.load({
+      version: 1,
+      worldId: 'world',
+      step: 0,
+      nextEntityId: 2,
+      entities: [{ id: 1, components: { strictDeser: 'not-a-number' } }],
+      pendingPairs: [],
+    });
+  } catch (err) {
+    threw = err;
+  }
+  expect(threw).toBeInstanceOf(DeserializeError);
+  expect(threw as DeserializeError).toMatchObject({ entity: 1, component: 'strictDeser' });
+  expect((threw as Error).message).toContain('expected a number');
 });

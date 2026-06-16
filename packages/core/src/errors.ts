@@ -80,6 +80,41 @@ export class WorldRunningError extends LangECSError {
   }
 }
 
+/** Thrown by `world.load()` when a snapshot's `version` is not one this build understands (R36). */
+export class SnapshotVersionError extends LangECSError {
+  readonly version: unknown;
+  readonly supported: number;
+
+  constructor(version: unknown, supported: number) {
+    super(
+      `Unsupported snapshot version ${JSON.stringify(version)}; this build of @langecs/core ` +
+        `reads version ${supported}. Load it with a matching version, or migrate the snapshot first.`,
+    );
+    this.name = 'SnapshotVersionError';
+    this.version = version;
+    this.supported = supported;
+  }
+}
+
+/** Thrown when a component's `deserialize` hook fails while loading a snapshot (R36). */
+export class DeserializeError extends LangECSError {
+  readonly entity: number;
+  readonly component: string;
+  readonly cause: unknown;
+
+  constructor(entity: number, component: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Failed to deserialize component "${component}" on entity ${entity}: ${detail}. ` +
+        `Check the component's deserialize() hook against the snapshot's stored shape (R36).`,
+    );
+    this.name = 'DeserializeError';
+    this.entity = entity;
+    this.component = component;
+    this.cause = cause;
+  }
+}
+
 /** Thrown when a snapshot references component names missing from the registry (R36). */
 export class UnknownComponentError extends LangECSError {
   readonly componentNames: string[];

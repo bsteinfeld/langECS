@@ -5,9 +5,11 @@ import { AwaitingHuman, HumanResponse, SystemError } from './builtins';
 import type { ComponentInit, ComponentType, QueryTerm } from './component';
 import { getComponentByName, isComponentType } from './component';
 import {
+  DeserializeError,
   DuplicateSystemError,
   MissingResourceError,
   type SerializedError,
+  SnapshotVersionError,
   serializeError,
   UnknownComponentError,
   UnknownEntityError,
@@ -20,6 +22,7 @@ import { RunStream } from './events';
 import type {
   ExternalChange,
   ObserverEvent,
+  QueryStat,
   SystemInfo,
   SystemRunInfo,
   WorldObserver,
@@ -190,6 +193,22 @@ export interface World {
   systems(): SystemInfo[];
   /** Names of registered resources, sorted (R47). Values are never exposed (R18). */
   resources(): string[];
+  /**
+   * Forward introspection: which registered systems' queries currently match
+   * `entityId` in committed state, in registration order. The complement of
+   * `systems()` — answers "what could fire for this entity?" (an empty result
+   * for a stalled agent usually means a missing component or a `Not()` term).
+   * Returns `[]` for an unknown entity. Idle-only read; matching is a pure check
+   * and never considers dirt or `when` guards.
+   */
+  systemsMatching(entityId: number): SystemInfo[];
+  /**
+   * Per-system run statistics aggregated from the flight recorder (R42) plus
+   * current match counts — for "which systems are hot / never fire?" diagnostics
+   * and the devtools Systems view. `matchCount` is live; the run counters cover
+   * only the retained trace window (0 when `trace: false`). Read-only.
+   */
+  queryStats(): QueryStat[];
 }
 
 interface RegisteredSystem {
@@ -239,6 +258,9 @@ interface BarrierOutcome {
 }
 
 const pairId = (systemKey: string, entity: number): string => `${systemKey}::${entity}`;
+
+/** The single snapshot format this build reads and writes (R35/R36). */
+const SNAPSHOT_VERSION = 1;
 
 /** A `ResourceRef` is just a typed name (R18 amended): unwrap to the slot key. */
 const resourceNameOf = (nameOrRef: string | ResourceRef<unknown>): string =>
@@ -476,22 +498,69 @@ class WorldImpl implements World {
 
   // ------------------------------------------------------------ introspection
 
+  private systemInfo(sys: RegisteredSystem): SystemInfo {
+    const include: string[] = [];
+    const exclude: string[] = [];
+    for (const term of sys.query) {
+      if (isComponentType(term)) include.push(term.componentName);
+      else exclude.push(term.not.componentName);
+    }
+    const info: SystemInfo = {
+      key: sys.key,
+      name: sys.def.name,
+      query: { include, exclude },
+      hasGuard: sys.def.when !== undefined,
+    };
+    if (sys.agent !== undefined) info.agent = sys.agent;
+    return info;
+  }
+
   systems(): SystemInfo[] {
-    return this.systemList.map((sys) => {
-      const include: string[] = [];
-      const exclude: string[] = [];
-      for (const term of sys.query) {
-        if (isComponentType(term)) include.push(term.componentName);
-        else exclude.push(term.not.componentName);
+    return this.systemList.map((sys) => this.systemInfo(sys));
+  }
+
+  systemsMatching(entityId: number): SystemInfo[] {
+    const comps = this.entities.get(entityId);
+    if (!comps) return [];
+    const out: SystemInfo[] = [];
+    for (const sys of this.systemList) {
+      if (this.matchesQuery(sys.query, comps)) out.push(this.systemInfo(sys));
+    }
+    return out;
+  }
+
+  queryStats(): QueryStat[] {
+    // Aggregate run counters from the retained flight recorder.
+    const runs = new Map<
+      string,
+      { runCount: number; errorCount: number; totalMs: number; last: number }
+    >();
+    for (const step of this.traceBuf) {
+      for (const run of step.runs) {
+        let agg = runs.get(run.system);
+        if (!agg) {
+          agg = { runCount: 0, errorCount: 0, totalMs: 0, last: 0 };
+          runs.set(run.system, agg);
+        }
+        agg.runCount += 1;
+        if (run.error) agg.errorCount += 1;
+        agg.totalMs += run.ms;
+        if (step.step > agg.last) agg.last = step.step;
       }
-      const info: SystemInfo = {
+    }
+    return this.systemList.map((sys) => {
+      const agg = runs.get(sys.key);
+      const stat: QueryStat = {
         key: sys.key,
         name: sys.def.name,
-        query: { include, exclude },
-        hasGuard: sys.def.when !== undefined,
+        matchCount: this.matched.get(sys.key)?.size ?? 0,
+        runCount: agg?.runCount ?? 0,
+        errorCount: agg?.errorCount ?? 0,
+        totalMs: agg?.totalMs ?? 0,
       };
-      if (sys.agent !== undefined) info.agent = sys.agent;
-      return info;
+      if (sys.agent !== undefined) stat.agent = sys.agent;
+      if (agg && agg.last > 0) stat.lastStepFired = agg.last;
+      return stat;
     });
   }
 
@@ -1393,6 +1462,11 @@ class WorldImpl implements World {
 
   load(snapshot: Snapshot): void {
     this.assertIdle('load a snapshot');
+    // Fail loudly on a format we don't understand rather than misreading a
+    // future/foreign snapshot against v1 field assumptions (R36).
+    if (snapshot.version !== SNAPSHOT_VERSION) {
+      throw new SnapshotVersionError(snapshot.version, SNAPSHOT_VERSION);
+    }
     const missingComponents = new Set<string>();
     for (const entity of snapshot.entities) {
       for (const name of Object.keys(entity.components)) {
@@ -1417,7 +1491,15 @@ class WorldImpl implements World {
       for (const [name, raw] of Object.entries(entity.components)) {
         const def = getComponentByName(name);
         const detached = JSON.parse(JSON.stringify({ raw })).raw as unknown;
-        comps.set(name, def?.deserialize ? def.deserialize(detached) : detached);
+        if (def?.deserialize) {
+          try {
+            comps.set(name, def.deserialize(detached));
+          } catch (err) {
+            throw new DeserializeError(entity.id, name, err);
+          }
+        } else {
+          comps.set(name, detached);
+        }
       }
       this.entities.set(entity.id, comps);
     }

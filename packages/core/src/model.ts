@@ -7,6 +7,15 @@ export type Msg = {
   toolCalls?: { id: string; name: string; args: unknown }[];
   toolCallId?: string;
   name?: string;
+  /**
+   * Reasoning / "thinking" text a model emitted alongside its answer
+   * (o1/o3, Claude extended thinking, DeepSeek-R1, …). Output-only and
+   * observation-oriented: adapters populate it from the provider's reasoning
+   * blocks, but it is never sent back to the model (`content` is the durable
+   * answer). Plain JSON like the rest of `Msg`, so it survives snapshots — drop
+   * it before persisting if the reasoning is sensitive.
+   */
+  thinking?: string;
   meta?: Record<string, unknown>;
 };
 
@@ -23,6 +32,21 @@ export interface ModelRequest {
   tools?: ToolSpec[];
   temperature?: number;
   maxTokens?: number;
+  /** Nucleus sampling (0–1). Set this or `temperature`, not both. */
+  topP?: number;
+  /** Top-K sampling: only consider the K most likely tokens. */
+  topK?: number;
+  /** Penalize tokens by their existing frequency. Provider ranges vary. */
+  frequencyPenalty?: number;
+  /** Penalize tokens that have appeared at all. Provider ranges vary. */
+  presencePenalty?: number;
+  /**
+   * Sampling seed. With a fixed seed (and temperature) supporting providers
+   * return near-deterministic output — useful for reproducible runs and tests.
+   */
+  seed?: number;
+  /** Stop generation when any of these strings is produced. */
+  stopSequences?: string[];
 }
 
 export interface ModelResult {

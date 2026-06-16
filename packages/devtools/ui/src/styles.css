@@ -1134,6 +1134,11 @@ select.input {
   display: inline-flex;
 }
 
+.err-count {
+  color: var(--err);
+  font-weight: 700;
+}
+
 .sys-detail td {
   background: var(--bg);
   padding: 8px 10px 12px;

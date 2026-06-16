@@ -107,6 +107,52 @@ describe('fromAiSdk generate()', () => {
     ]);
   });
 
+  test('forwards advanced sampling parameters to the provider call', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    await model.generate({
+      messages: [{ role: 'user', content: 'hi' }],
+      topP: 0.9,
+      topK: 40,
+      frequencyPenalty: 0.5,
+      presencePenalty: 0.25,
+      seed: 1234,
+      stopSequences: ['STOP'],
+    });
+    const call = mock.doGenerateCalls[0]!;
+    expect(call.topP).toBe(0.9);
+    expect(call.topK).toBe(40);
+    expect(call.frequencyPenalty).toBe(0.5);
+    expect(call.presencePenalty).toBe(0.25);
+    expect(call.seed).toBe(1234);
+    expect(call.stopSequences).toEqual(['STOP']);
+  });
+
+  test('maps reasoning content to Msg.thinking', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [
+          { type: 'reasoning', text: 'The user wants a greeting.' },
+          { type: 'text', text: 'Hello!' },
+        ],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    const result = await model.generate({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(result.message.content).toBe('Hello!');
+    expect(result.message.thinking).toBe('The user wants a greeting.');
+  });
+
   test('maps role:system entries inside messages without warnings', async () => {
     const mock = new MockLanguageModelV3({
       doGenerate: {
@@ -208,6 +254,28 @@ describe('fromAiSdk stream()', () => {
       { id: 'call_1', name: 'add', args: { a: 1, b: 2 } },
     ]);
     expect(result?.finishReason).toBe('tool-calls');
+  });
+
+  test('captures streamed reasoning into Msg.thinking without forwarding it as text', async () => {
+    const mock = streamFrom([
+      { type: 'stream-start', warnings: [] },
+      { type: 'reasoning-start', id: 'r1' },
+      { type: 'reasoning-delta', id: 'r1', delta: 'think ' },
+      { type: 'reasoning-delta', id: 'r1', delta: 'hard' },
+      { type: 'reasoning-end', id: 'r1' },
+      { type: 'text-start', id: 't1' },
+      { type: 'text-delta', id: 't1', delta: 'Hi' },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage },
+    ]);
+    const model = fromAiSdk(mock);
+    const chunks: string[] = [];
+    const result = await model.stream?.({ messages: [{ role: 'user', content: 'hi' }] }, (d) => {
+      if (d.text) chunks.push(d.text);
+    });
+    expect(chunks).toEqual(['Hi']);
+    expect(result?.message.content).toBe('Hi');
+    expect(result?.message.thinking).toBe('think hard');
   });
 
   test('rejects when the stream emits an error part', async () => {

@@ -118,6 +118,12 @@ describe('toAssistantMsg / toUsage', () => {
     expect(msg.toolCalls).toEqual([{ id: 'c1', name: 'add', args: { a: 1 } }]);
   });
 
+  test('reasoning text maps to thinking; omitted when empty', () => {
+    expect(toAssistantMsg('answer', [], 'let me think...').thinking).toBe('let me think...');
+    expect(toAssistantMsg('answer', []).thinking).toBeUndefined();
+    expect(toAssistantMsg('answer', [], '').thinking).toBeUndefined();
+  });
+
   test('usage maps token counts and tolerates undefined', () => {
     expect(toUsage(undefined)).toBeUndefined();
     expect(toUsage({ inputTokens: 3, outputTokens: 7 })).toEqual({

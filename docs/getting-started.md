@@ -8,8 +8,9 @@ there are no edges: the agent loop emerges from data changing.
 
 This is an experiment in validating that mapping (see [DESIGN.md](../DESIGN.md) and
 [prior-art.md](./prior-art.md)). The [examples](../examples/) form a learning path:
-seven standalone examples plus six ports of LangGraph.js originals, each port with
-an honest side-by-side comparison. `langecs` is a working title — see
+ten standalone examples plus six ports of LangGraph.js originals, each port with
+an honest side-by-side comparison; the [patterns catalog](../examples/PATTERNS.md)
+names the recurring shapes. `langecs` is a working title — see
 [naming.md](./naming.md).
 
 This page walks you through building one ReAct agent end to end. It mirrors
@@ -300,16 +301,19 @@ trace waterfall.
 
 ## Where next
 
-- [`examples/`](../examples/README.md) — fourteen runnable examples as a
+- [`examples/`](../examples/README.md) — sixteen runnable examples as a
   learning path. Start with **hello-world**, **order-pipeline**, and
   **tools-from-scratch** (an agent from raw parts → the engine as a no-LLM
   workflow runtime → the tool loop demystified), then the real-world workflows
-  (support-desk, content-pipeline, code-review-crew), the multi-agent patterns
-  (research-team, supervisor, reflection), and finally the six LangGraph.js
-  ports with their honest verdicts.
+  (support-desk, content-pipeline, code-review-crew, rag-qa, context-window),
+  the multi-agent patterns (research-team, supervisor, reflection), and finally
+  the six LangGraph.js ports with their honest verdicts. The
+  [patterns catalog](../examples/PATTERNS.md) names the shapes they share.
 - [concepts.md](./concepts.md) — the full mental model: the step loop, dirty
   rules, reducers, scoping, snapshots.
 - The guides — task-focused deep dives:
+  [debugging reactive systems](./guides/debugging-systems.md) ("why didn't my
+  system fire?"), [structured output and routing](./guides/structured-output.md),
   [errors and retries](./guides/errors-and-retries.md),
   [human-in-the-loop](./guides/human-in-the-loop.md),
   [multi-agent patterns](./guides/multi-agent.md),

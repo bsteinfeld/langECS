@@ -189,6 +189,29 @@ export function lastRunBySystem(trace: StepTrace[]): Map<string, LastRun> {
   return map;
 }
 
+export interface RunStats {
+  runCount: number;
+  errorCount: number;
+}
+
+/**
+ * Aggregate run/error counts per system across the retained trace — the
+ * "which systems are hot / never fire / keep erroring" view (≈ world.queryStats,
+ * computed client-side from the trace the UI already holds).
+ */
+export function runStatsBySystem(trace: StepTrace[]): Map<string, RunStats> {
+  const map = new Map<string, RunStats>();
+  for (const step of trace) {
+    for (const run of step.runs) {
+      const stat = map.get(run.system) ?? { runCount: 0, errorCount: 0 };
+      stat.runCount += 1;
+      if (run.error !== undefined) stat.errorCount += 1;
+      map.set(run.system, stat);
+    }
+  }
+  return map;
+}
+
 // ------------------------------------------------------------- span grouping
 
 export interface TraceGroup {

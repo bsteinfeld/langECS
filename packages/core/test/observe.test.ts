@@ -295,6 +295,71 @@ test('T26 introspection: systems()/resources()/listComponents()/running (R47)', 
   expect(byName.has('AwaitingHuman')).toBe(true);
 });
 
+test('systemsMatching: forward introspection of which systems match an entity', () => {
+  const Topic = defineComponent<string>({ name: 'smTopic' });
+  const Busy = defineTag('smBusy');
+  const world = createWorld();
+  world.use(defineSystem({ name: 'smReady', query: [Topic, { not: Busy }], run: () => {} }));
+  world.use(defineSystem({ name: 'smAlways', query: [Topic], run: () => {} }));
+
+  const e = world.spawn(Topic('hi'));
+  expect(world.systemsMatching(e.id).map((s) => s.key)).toEqual(['smReady', 'smAlways']);
+
+  // Adding the Not()-excluded tag drops the narrower system from the match set.
+  e.add(Busy);
+  expect(world.systemsMatching(e.id).map((s) => s.key)).toEqual(['smAlways']);
+
+  // Unknown entity → [].
+  expect(world.systemsMatching(9999)).toEqual([]);
+});
+
+test('queryStats: live match counts + aggregated run counters from the trace', async () => {
+  const N = defineComponent<number>({ name: 'qsN' });
+  const world = createWorld();
+  world.use(defineSystem({ name: 'qsTouch', query: [N], run: (e) => e.set(N, e.get(N) + 1) }));
+  world.spawn(N(0));
+  world.spawn(N(0));
+  await world.run();
+
+  const touch = world.queryStats().find((s) => s.key === 'qsTouch')!;
+  expect(touch.matchCount).toBe(2); // both entities still match [N]
+  // Once per entity: a system's own write to a queried component never
+  // retriggers it (self-write exclusion), so each pair fires exactly once.
+  expect(touch.runCount).toBe(2);
+  expect(touch.errorCount).toBe(0);
+  expect(touch.lastStepFired).toBe(1);
+});
+
+test('queryStats counts errored runs', async () => {
+  const N = defineComponent<number>({ name: 'qsErrN' });
+  const world = createWorld();
+  world.use(
+    defineSystem({
+      name: 'qsErr',
+      query: [N],
+      run: () => {
+        throw new Error('x');
+      },
+    }),
+  );
+  world.spawn(N(1));
+  await world.run();
+  const stat = world.queryStats().find((s) => s.key === 'qsErr')!;
+  expect(stat.runCount).toBe(1);
+  expect(stat.errorCount).toBe(1);
+});
+
+test('queryStats counters are empty with trace disabled, but matchCount still works', async () => {
+  const C = defineComponent<number>({ name: 'qsNoTraceC' });
+  const world = createWorld({ trace: false });
+  world.use(defineSystem({ name: 'qsNoTrace', query: [C], run: (e) => e.set(C, e.get(C) + 1) }));
+  world.spawn(C(0));
+  await world.run({ limit: 3 });
+  const stat = world.queryStats().find((s) => s.key === 'qsNoTrace')!;
+  expect(stat.runCount).toBe(0); // no trace retained
+  expect(stat.matchCount).toBe(1); // committed-state match is independent of trace
+});
+
 test('T24 wrapSystemRun hardening: a swallowing wrapper cannot turn a throw into a partial commit (R31)', async () => {
   const In = defineComponent<number>({ name: 'obsSwIn' });
   const A = defineComponent<string>({ name: 'obsSwA' });

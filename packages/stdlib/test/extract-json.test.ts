@@ -76,9 +76,9 @@ test('retries once, appending the malformed output and the parse error as contex
   // Original user prompt, the malformed assistant reply, then the correction.
   expect(retryMessages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
   expect(retryMessages[1]?.content).toBe('{"broken": ');
-  expect(retryMessages[2]?.content).toContain('not valid JSON');
-  expect(retryMessages[2]?.content).toContain('JSON.parse failed with:');
-  expect(retryMessages[2]?.content).toContain('ONLY the corrected JSON value');
+  expect(retryMessages[2]?.content).toContain('could not be used');
+  expect(retryMessages[2]?.content).toContain('It failed with:');
+  expect(retryMessages[2]?.content).toContain('ONLY a corrected JSON value');
   // The strict-JSON instruction rides along on the retry too.
   expect(requests[1]?.system).toContain('ONLY a single valid JSON value');
 });
@@ -92,11 +92,38 @@ test('throws a descriptive error after the second parse failure', async () => {
   const failing = extractJson(model, { prompt: 'extract' });
   await expect(failing).rejects.toThrow('extractJson');
   await expect(failing).rejects.toThrow('2 attempts');
-  await expect(failing).rejects.toThrow('Second parse error:');
+  await expect(failing).rejects.toThrow('Second error:');
   await expect(failing).rejects.toThrow('still not json');
 });
 
 test('throws when neither prompt nor messages is given', async () => {
   const model = scriptedModel([]);
   await expect(extractJson(model, {})).rejects.toThrow('nothing to send');
+});
+
+test('validate hook: a passing validator returns the typed value', async () => {
+  const model = scriptedModel([{ role: 'assistant', content: '{"n":42}' }]);
+  const validate = (raw: unknown): { n: number } => {
+    if (typeof raw !== 'object' || raw === null || typeof (raw as { n?: unknown }).n !== 'number') {
+      throw new Error('expected { n: number }');
+    }
+    return raw as { n: number };
+  };
+  await expect(extractJson(model, { prompt: 'go' }, validate)).resolves.toEqual({ n: 42 });
+});
+
+test('validate hook: a validation failure (not a parse failure) triggers the retry', async () => {
+  const requests: ModelRequest[] = [];
+  const model = scriptedModel([
+    capture(requests, '{"n":"not a number"}'), // valid JSON, invalid shape
+    capture(requests, '{"n":7}'),
+  ]);
+  const validate = (raw: unknown): { n: number } => {
+    if (typeof (raw as { n?: unknown }).n !== 'number') throw new Error('n must be a number');
+    return raw as { n: number };
+  };
+  await expect(extractJson(model, { prompt: 'go' }, validate)).resolves.toEqual({ n: 7 });
+  expect(requests).toHaveLength(2);
+  // The validation error (not a JSON.parse error) is what the model is told to fix.
+  expect(requests[1]?.messages.at(-1)?.content).toContain('n must be a number');
 });

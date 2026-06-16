@@ -292,7 +292,7 @@ extractJson<T = unknown>(model: Model, opts: {
   system?: string;                   // your system text; the strict-JSON directive is appended
   schema?: Record<string, unknown>;  // JSON Schema, embedded as text in the instruction
   schemaName?: string;               // display name for the schema, e.g. 'Person'
-}): Promise<T>
+}, validate?: (parsed: unknown) => T): Promise<T>
 ```
 
 Model-agnostic structured output over any core `Model` (no provider-specific
@@ -313,9 +313,49 @@ const person = await extractJson<{ name: string; age: number }>(model, {
 });
 ```
 
-`T` is a **caller assertion, not validation** — the parsed value is returned as
-`T` unchecked. Validate with your schema library where correctness matters. The
-schema is only ever embedded as instruction text; nothing is validated against it.
+Without `validate`, `T` is a **caller assertion** — the parsed value is returned
+unchecked (the schema is only embedded as instruction text). Pass a `validate`
+hook to actually enforce the shape: it returns the typed value or **throws**, and
+a throw triggers the same single retry with the error fed back to the model.
+Plug in a schema library directly — `extractJson(model, opts, MySchema.parse)`
+(Zod) — or a hand-written guard.
+
+### `routeJson` — type-safe routing
+
+For the dispatcher / triage / classifier case (pick one of N named routes),
+`routeJson` is the validated primitive: the returned `route` is typed as your
+union, and an out-of-set choice triggers the retry.
+
+```ts
+const { route, reason } = await routeJson<'billing' | 'tech' | 'sales'>(model, {
+  routes: [
+    { name: 'billing', description: 'invoices, refunds, payment' },
+    { name: 'tech', description: 'bugs, errors, how-to' },
+    { name: 'sales', description: 'pricing, plans' },
+  ],
+  prompt: ticket.text,
+});
+```
+
+See the [structured-output guide](../../docs/guides/structured-output.md) for the
+full story (including reasoning content via `Msg.thinking`).
+
+## Context window
+
+Keep long conversations under a token budget without losing durable history:
+
+```ts
+recentMessages(messages, { maxMessages?, maxTokens?, estimate?, keepSystem? }): Msg[]
+estimateTokens(stringOrMessages): number      // ~4 chars/token heuristic, overridable
+withMessageWindow(model, options): Model       // trims each request's messages before the call
+```
+
+`withMessageWindow` wraps a `Model` so every call sees only the most recent
+messages (or a token budget), pinning leading system messages and never
+orphaning a tool result — while the stored `Messages` history stays intact. It's
+a plain wrapper (no scheduler interaction), so it composes safely with the chat
+loop and is trivially testable. See the
+[context-window example](../../examples/context-window/).
 
 ---
 

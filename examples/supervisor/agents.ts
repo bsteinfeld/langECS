@@ -28,7 +28,7 @@ import {
   SystemError,
   type World,
 } from '@langecs/core';
-import { Inbox, Messages, MessageWaiting, ModelRef } from '@langecs/stdlib';
+import { extractJson, Inbox, Messages, MessageWaiting, ModelRef } from '@langecs/stdlib';
 
 // ---------------------------------------------------------------- components
 
@@ -61,30 +61,37 @@ async function callModel(
   return result.message;
 }
 
+/** The supervisor's routing decision: a task for each worker that's needed. */
+type Routing = { researcher?: string; writer?: string };
+
 /**
- * Tolerant parser for the supervisor's routing JSON. Falls back to assigning
- * the raw request to both workers if the model ignored the format.
+ * Validates the supervisor's routing JSON: each present task must be a
+ * non-empty string, and at least one worker must be assigned. Throwing here
+ * feeds `extractJson`'s single retry — a fumbled first answer self-corrects —
+ * instead of the old tolerant hand-parser silently assigning the raw request to
+ * everyone. (Plug a schema library here in real code; this stays dependency-free.)
  */
-function parseRouting(content: string, fallback: string): { researcher?: string; writer?: string } {
-  const start = content.indexOf('{');
-  const end = content.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try {
-      const parsed = JSON.parse(content.slice(start, end + 1)) as Record<string, unknown>;
-      const out: { researcher?: string; writer?: string } = {};
-      if (typeof parsed.researcher === 'string' && parsed.researcher.length > 0) {
-        out.researcher = parsed.researcher;
-      }
-      if (typeof parsed.writer === 'string' && parsed.writer.length > 0) {
-        out.writer = parsed.writer;
-      }
-      if (out.researcher !== undefined || out.writer !== undefined) return out;
-    } catch {
-      // fall through to the fallback below
-    }
+function validateRouting(parsed: unknown): Routing {
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('expected a JSON object like {"researcher": "...", "writer": "..."}');
   }
-  return { researcher: fallback, writer: fallback };
+  const { researcher, writer } = parsed as Record<string, unknown>;
+  const out: Routing = {};
+  if (typeof researcher === 'string' && researcher.trim().length > 0) out.researcher = researcher;
+  if (typeof writer === 'string' && writer.trim().length > 0) out.writer = writer;
+  if (out.researcher === undefined && out.writer === undefined) {
+    throw new Error('assign a task to at least one worker: "researcher" and/or "writer".');
+  }
+  return out;
 }
+
+const ROUTING_SCHEMA = {
+  type: 'object',
+  properties: {
+    researcher: { type: 'string', description: 'task for the researcher (facts/background)' },
+    writer: { type: 'string', description: 'task for the writer (polished prose)' },
+  },
+};
 
 // ------------------------------------------------------------------- workers
 
@@ -144,9 +151,8 @@ const ROUTING_PROMPT =
   'You are a supervisor coordinating two workers:\n' +
   '- researcher: finds facts and background.\n' +
   '- writer: produces polished prose.\n' +
-  'Decompose the user request into one task per worker. Respond with ONLY a JSON ' +
-  'object, no prose: {"researcher": "<task>", "writer": "<task>"}. ' +
-  'Omit a key only if that worker is truly not needed.';
+  'Decompose the user request into one task per worker. Omit a worker only if it ' +
+  'is truly not needed (but assign at least one).';
 
 const AGGREGATE_PROMPT =
   'You are a supervisor. Your workers have reported their results. Compose the ' +
@@ -164,12 +170,14 @@ const plan = defineSystem({
   when: (e) => e.get(Messages).some((m) => m.role === 'user'),
   run: async (e, ctx) => {
     const messages = e.get(Messages);
-    const reply = await callModel(ctx, e.get(ModelRef), 'supervisor', {
-      system: ROUTING_PROMPT,
-      messages,
-    });
-    const request = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
-    const tasks = parseRouting(reply.content, request);
+    // Typed, validated structured output: extractJson enforces the schema and
+    // retries once on a bad reply — no tolerant hand-parsing, no silent fallback.
+    const model = ctx.resource<Model>(e.get(ModelRef));
+    const tasks = await extractJson(
+      model,
+      { system: ROUTING_PROMPT, schema: ROUTING_SCHEMA, schemaName: 'Routing', messages },
+      validateRouting,
+    );
 
     let expect = 0;
     if (tasks.researcher !== undefined) {
@@ -194,7 +202,8 @@ const plan = defineSystem({
       });
     }
 
-    e.add(Messages, [reply]); // keep the routing decision in the record
+    // Keep the routing decision in the conversation record.
+    e.add(Messages, [{ role: 'assistant', content: JSON.stringify(tasks) }]);
     e.set(Dispatched, { expect });
   },
 });

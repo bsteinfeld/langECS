@@ -25,11 +25,13 @@ export {
   type TagType,
 } from './component';
 export {
+  DeserializeError,
   DuplicateComponentError,
   DuplicateSystemError,
   LangECSError,
   MissingResourceError,
   type SerializedError,
+  SnapshotVersionError,
   UnknownComponentError,
   UnknownEntityError,
   UnknownSystemError,
@@ -58,6 +60,7 @@ export {
 export type {
   ExternalChange,
   ObserverEvent,
+  QueryStat,
   RunInfo,
   SystemInfo,
   SystemRunInfo,

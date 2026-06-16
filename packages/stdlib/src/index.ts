@@ -14,7 +14,21 @@ export {
   type ToolCall,
   Tools,
 } from './components';
-export { type ExtractJsonOptions, extractJson } from './extract';
+export {
+  estimateTokens,
+  recentMessages,
+  type WindowOptions,
+  withMessageWindow,
+} from './context';
+export {
+  type ExtractJsonOptions,
+  extractJson,
+  type RouteDecision,
+  type RouteJsonOptions,
+  type RouteSpec,
+  routeJson,
+  type Validator,
+} from './extract';
 export { ask, lastAssistant, sendMessage, userMessage } from './helpers';
 export { type ReactAgentOptions, reactAgent } from './react';
 export { callLLM, executeTools, retry, toolApproval } from './systems';

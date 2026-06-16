@@ -21,7 +21,9 @@
     "content-pipeline": "tsx content-pipeline/main.ts",
     "code-review-crew": "tsx code-review-crew/main.ts",
     "research-team": "tsx research-team/main.ts",
-    "devtools-demo": "tsx devtools-demo/main.ts"
+    "devtools-demo": "tsx devtools-demo/main.ts",
+    "context-window": "tsx context-window/main.ts",
+    "rag-qa": "tsx rag-qa/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",

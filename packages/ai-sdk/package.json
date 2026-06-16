@@ -1,12 +1,32 @@
 {
   "name": "@langecs/ai-sdk",
   "version": "0.1.0",
-  "type": "module",
   "description": "Vercel AI SDK model adapter for LangECS — every provider via one dependency",
   "license": "MIT",
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/langecs/langecs.git",
+    "directory": "packages/ai-sdk"
+  },
+  "bugs": "https://github.com/langecs/langecs/issues",
+  "homepage": "https://github.com/langecs/langecs/tree/main/packages/ai-sdk#readme",
+  "keywords": [
+    "llm",
+    "agents",
+    "ai",
+    "agent-framework",
+    "ecs",
+    "entity-component-system",
+    "typescript",
+    "vercel-ai-sdk",
+    "model-adapter",
+    "streaming"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

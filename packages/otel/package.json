@@ -1,12 +1,33 @@
 {
   "name": "@langecs/otel",
   "version": "0.1.0",
-  "type": "module",
   "description": "OpenTelemetry instrumentation for LangECS — run/step/system spans, GenAI semantic conventions for models and tools, metrics",
   "license": "MIT",
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/langecs/langecs.git",
+    "directory": "packages/otel"
+  },
+  "bugs": "https://github.com/langecs/langecs/issues",
+  "homepage": "https://github.com/langecs/langecs/tree/main/packages/otel#readme",
+  "keywords": [
+    "llm",
+    "agents",
+    "ai",
+    "agent-framework",
+    "ecs",
+    "entity-component-system",
+    "typescript",
+    "opentelemetry",
+    "observability",
+    "tracing",
+    "genai-semconv"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

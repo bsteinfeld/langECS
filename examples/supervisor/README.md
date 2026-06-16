@@ -117,9 +117,13 @@ const graph = workflow.compile();
 
 - **Structured routing.** LangGraph forces the routing decision through a
   zod-validated tool call (`tool_choice: "route"`, `next: z.enum([...])`) —
-  typed, validated, impossible to mis-parse. Our supervisor asks for raw JSON
-  and hand-parses it with a fallback; core has no structured-output helper yet.
-  This is the weakest part of the port.
+  typed, validated, impossible to mis-parse. This port now matches the
+  *substance*: it routes via stdlib `extractJson` with a schema and a `validate`
+  hook (a malformed reply self-corrects on a one-shot retry; see
+  [the structured-output guide](../../docs/guides/structured-output.md) and
+  `routeJson` for single-choice dispatch). The remaining edge is ergonomic —
+  LangGraph's tool-call routing reads a touch more declaratively than a system
+  calling a helper.
 - **The flow is explicit.** `addNode` / `addEdge` / `addConditionalEdges` reads
   as a diagram; you can render it. The ECS choreography is *emergent* from
   queries + dirty-tracking — to see why `aggregate` fired you read the trace,

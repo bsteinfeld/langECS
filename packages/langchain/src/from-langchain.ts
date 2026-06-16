@@ -16,8 +16,11 @@ import { toLangChainMessages, toLangChainTools, toModelResult } from './convert'
  * - `stream()` is implemented via the model's `.stream()` (every LangChain
  *   runnable exposes it; non-streaming models fall back to a single chunk).
  *
- * Note: `req.temperature` / `req.maxTokens` are ignored — LangChain chat models
- * configure sampling at construction time and expose no portable call-time option.
+ * Note: call-time sampling controls (`req.temperature`, `req.maxTokens`,
+ * `req.topP`, `req.seed`, …) are ignored — LangChain chat models configure
+ * sampling at construction time and expose no portable call-time option. The
+ * adapter does surface reasoning content (`Msg.thinking`) when the model emits
+ * it (DeepSeek `reasoning_content`, Anthropic thinking blocks).
  */
 export function fromLangChain(chatModel: BaseChatModel): Model {
   const bound = (req: ModelRequest) => {
