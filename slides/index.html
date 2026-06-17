@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>LangECS — a lightning talk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:#0B1020; --grid:#1B2740; --text:#E8ECF4; --slate:#5B6478;
+  --chip-outline:#2C3C5C; --cyan:#34E0E0; --amber:#FFB347; --coral:#FF5C5C;
+  --panel:#0F1730;
+  --disp:"Space Grotesk", system-ui, sans-serif;
+  --body:"Inter", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--body);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+/* blueprint grid + starfield */
+#bg{
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:44px 44px;
+  opacity:.32;
+  -webkit-mask-image:radial-gradient(ellipse 90% 80% at 50% 45%, #000 55%, transparent 100%);
+          mask-image:radial-gradient(ellipse 90% 80% at 50% 45%, #000 55%, transparent 100%);
+}
+#stars{position:fixed; inset:0; z-index:0; pointer-events:none}
+#stars i{position:absolute; width:2px;height:2px;border-radius:50%;background:#aebbd6;opacity:.5;
+  animation:twinkle var(--tw,5s) ease-in-out infinite alternate}
+@keyframes twinkle{from{opacity:.12}to{opacity:.7}}
+
+/* deck */
+.deck{position:relative; z-index:1; height:100%}
+.slide{
+  position:absolute; inset:0;
+  display:none;
+  flex-direction:column;
+  justify-content:center;
+  padding:clamp(28px,5vw,86px);
+  padding-bottom:clamp(40px,6vw,96px);
+  opacity:0;
+}
+.slide.active{display:flex; animation:slideIn .26s ease-out both}
+@keyframes slideIn{from{opacity:0; transform:translateX(14px)} to{opacity:1; transform:none}}
+
+.kicker{
+  font-family:var(--mono); font-size:clamp(11px,1.2vw,13px);
+  letter-spacing:.22em; text-transform:uppercase; color:var(--slate);
+  margin-bottom:clamp(10px,1.6vw,20px);
+}
+h1,h2{font-family:var(--disp); font-weight:700; letter-spacing:-.02em; margin:0; line-height:1.04}
+.h-xl{font-size:clamp(46px,9vw,116px)}
+.h-lg{font-size:clamp(30px,5vw,62px)}
+.h-md{font-size:clamp(24px,3.4vw,42px)}
+.accent{color:var(--cyan)}
+.tagline{font-size:clamp(17px,2.2vw,26px); color:#c4ccdc; max-width:18em; line-height:1.45; margin-top:18px}
+.body{font-size:clamp(15px,1.7vw,21px); color:#c4ccdc; line-height:1.6; max-width:30em; margin-top:18px}
+.body p{margin:.5em 0}
+.body .ln{margin:.34em 0}
+strong{color:var(--text); font-weight:600}
+em{color:var(--amber); font-style:normal}
+code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
+  background:rgba(52,224,224,.08); border:1px solid rgba(52,224,224,.18);
+  border-radius:6px; padding:.06em .42em}
+
+.stage{display:flex; gap:clamp(20px,4vw,64px); align-items:center; margin-top:6px; min-height:0; flex:1}
+.stage.two{flex-direction:row}
+.stage.center{flex:0 1 auto; flex-direction:column; align-items:center; text-align:center; justify-content:center; gap:4px}
+.stage.center .body{max-width:34em; text-align:center}
+.stage.center .visual{width:100%}
+.stage.center .scene{max-width:880px; max-height:44vh}
+.copy{flex:0 0 42%; min-width:0}
+.stage.wide-copy .copy{flex:0 0 50%}
+.visual{flex:1 1 0; min-width:0; display:flex; align-items:center; justify-content:center}
+.scene{width:100%; height:auto; max-height:62vh; overflow:visible}
+
+/* SVG primitives */
+.scene text{font-family:var(--mono); fill:var(--text)}
+.ent{fill:rgba(110,124,150,.06); stroke:var(--slate); stroke-width:2}
+.ent-lbl{fill:#9aa6bd; font-size:15px; text-anchor:middle}
+.note{fill:var(--slate); font-size:13px}
+.cap{fill:var(--cyan); font-size:14px; opacity:0; transition:opacity .4s}
+.cap.show{opacity:1}
+
+.chip{opacity:0; transform:scale(.6); transform-box:fill-box; transform-origin:center;
+  transition:opacity .3s ease, transform .3s cubic-bezier(.34,1.56,.64,1), filter .3s}
+.chip.show{opacity:1; transform:scale(1)}
+.chip rect{fill:rgba(110,124,150,.10); stroke:var(--chip-outline); stroke-width:1.5; rx:7}
+.chip text{font-size:13px; fill:#c7d0e2; text-anchor:middle; dominant-baseline:middle}
+.chip.live rect{stroke:var(--cyan)}
+.chip.live{filter:drop-shadow(0 0 7px rgba(52,224,224,.75))}
+.chip.amber rect{stroke:var(--amber); fill:rgba(255,179,71,.12)}
+.chip.amber text{fill:#ffd9a6}
+.chip.amber.show{filter:drop-shadow(0 0 7px rgba(255,179,71,.6))}
+.chip.err rect{stroke:var(--coral); fill:rgba(255,92,92,.12)}
+.chip.err text{fill:#ffbcbc}
+.chip.err.show{filter:drop-shadow(0 0 7px rgba(255,92,92,.6))}
+.chip.dead{opacity:.4; filter:none}
+.chip.dead rect{stroke:var(--slate)}
+
+.sys{transform-box:fill-box; transform-origin:center; transition:transform .25s ease, filter .25s ease}
+.sys rect{fill:rgba(15,23,48,.85); stroke:var(--slate); stroke-width:1.8; rx:10}
+.sys .sname{font-size:15px; fill:#dbe2f0; text-anchor:middle; font-weight:600}
+.sys .squery{font-size:12px; fill:var(--slate); text-anchor:middle}
+.sys.firing{transform:scale(1.05); filter:drop-shadow(0 0 12px rgba(52,224,224,.7))}
+.sys.firing rect{stroke:var(--cyan)}
+.sys.firing .squery{fill:#bfe9e9}
+.sys.vetoed rect{stroke:var(--amber); stroke-dasharray:5 4}
+.sys.vetoed .sname{fill:#9aa6bd}
+
+.trace{fill:none; stroke:var(--slate); stroke-width:2; stroke-linecap:round; opacity:.55}
+.trace.live{stroke:var(--cyan); opacity:1; filter:drop-shadow(0 0 5px rgba(52,224,224,.8))}
+.trace.dead{stroke:var(--slate)!important; opacity:.4!important; filter:none!important}
+.xmark{opacity:0; transition:opacity .3s}
+.xmark.show{opacity:1}
+.xmark line{stroke:var(--coral); stroke-width:3; stroke-linecap:round}
+
+.quiescent{fill:var(--slate); font-size:34px; font-weight:600; text-anchor:middle;
+  letter-spacing:.2em; opacity:0; transition:opacity .6s; font-family:var(--disp)}
+.quiescent.show{opacity:.32}
+
+/* reveal steps */
+[data-step]{opacity:0; transform:translateY(10px); transition:opacity .32s ease, transform .32s ease}
+[data-step].revealed{opacity:1; transform:none}
+
+/* generic helpers */
+.row{display:flex; gap:14px; align-items:center}
+.pill{font-family:var(--mono); font-size:13px; color:#bfe9e9; border:1px solid var(--chip-outline);
+  border-radius:999px; padding:5px 13px; background:rgba(110,124,150,.06)}
+
+/* mapping table */
+.rosetta{width:100%; border-collapse:collapse; margin-top:10px; font-size:clamp(14px,1.6vw,19px)}
+.rosetta td{padding:11px 10px; border-bottom:1px solid var(--grid)}
+.rosetta .k{font-family:var(--mono); color:var(--cyan); white-space:nowrap}
+.rosetta .arrow{color:var(--slate); text-align:center; width:2em}
+.rosetta .v{color:#aeb8cd}
+.footnote{margin-top:18px; font-family:var(--mono); font-size:13px; line-height:1.6;
+  color:#bfe9e9; border-left:2px solid var(--cyan); padding:10px 14px;
+  background:rgba(52,224,224,.05); border-radius:0 8px 8px 0}
+
+/* feature cards */
+.grid6{display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(12px,1.6vw,20px); width:100%}
+.fcard{border:1px solid var(--chip-outline); border-radius:14px; padding:clamp(14px,1.8vw,22px);
+  background:linear-gradient(180deg, rgba(15,23,48,.7), rgba(11,16,32,.4)); min-height:120px}
+.fcard .fnum{font-family:var(--mono); font-size:12px; color:var(--slate)}
+.fcard .fh{font-family:var(--disp); font-weight:600; font-size:clamp(16px,1.9vw,22px); margin:8px 0 6px}
+.fcard .fd{font-size:clamp(12px,1.3vw,14px); color:#9aa6bd; line-height:1.5}
+.fcard .glyph{height:30px; margin-bottom:4px}
+.fcard.c-cyan .fh{color:var(--cyan)} .fcard.c-amber .fh{color:var(--amber)} .fcard.c-coral .fh{color:var(--coral)}
+
+/* mini cards (save/fork) */
+.grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:clamp(12px,1.6vw,18px); width:100%}
+.mcard{border:1px solid var(--chip-outline); border-radius:14px; padding:16px;
+  background:rgba(15,23,48,.55)}
+.mcard h3{font-family:var(--disp); font-size:clamp(15px,1.7vw,19px); margin:0 0 8px; color:var(--text)}
+.mcard p{font-size:clamp(12px,1.3vw,14px); color:#9aa6bd; line-height:1.5; margin:0}
+.mcard .tag{font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase}
+.mcard.t-cyan .tag{color:var(--cyan)} .mcard.t-amber .tag{color:var(--amber)} .mcard.t-coral .tag{color:var(--coral)}
+
+/* devtools GUI mock */
+.gui{width:100%; max-width:980px; border-radius:14px; overflow:hidden;
+  border:1px solid var(--chip-outline); background:var(--panel);
+  box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.gui-chrome{display:flex; align-items:center; gap:8px; padding:10px 14px;
+  background:#0a1124; border-bottom:1px solid var(--grid)}
+.gui-chrome .dot{width:11px;height:11px;border-radius:50%}
+.dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+.gui-chrome .url{font-family:var(--mono); font-size:12px; color:var(--slate); margin-left:10px}
+.gui-body{display:grid; grid-template-columns:1.05fr 1.25fr .9fr; gap:1px; background:var(--grid)}
+.panel{background:var(--panel); padding:14px; min-height:230px}
+.gui.compact .panel{min-height:158px}
+.panel h4{font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--slate); margin:0 0 10px; font-weight:600}
+.bubble{font-size:13px; line-height:1.4; border-radius:10px; padding:8px 11px; margin-bottom:8px; max-width:90%}
+.bubble.user{background:rgba(110,124,150,.14); color:#dbe2f0; margin-left:auto}
+.bubble.tool{font-family:var(--mono); font-size:12px; background:rgba(52,224,224,.07);
+  border:1px solid rgba(52,224,224,.18); color:#bfe9e9}
+.bubble.bot{background:rgba(15,23,48,.9); border:1px solid var(--grid); color:#c4ccdc}
+.lock{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:11px; color:var(--amber)}
+.badge{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+  padding:6px 11px; border-radius:999px; border:1px solid var(--amber); color:var(--amber);
+  background:rgba(255,179,71,.1)}
+.badge .blip{width:8px;height:8px;border-radius:50%;background:var(--amber);
+  box-shadow:0 0 0 0 rgba(255,179,71,.6); animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,179,71,.55)}70%{box-shadow:0 0 0 9px rgba(255,179,71,0)}100%{box-shadow:0 0 0 0 rgba(255,179,71,0)}}
+.callout{position:absolute; font-family:var(--mono); font-size:12px; color:var(--text);
+  background:#0a1124; border:1px solid var(--cyan); border-radius:8px; padding:6px 10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.5); max-width:230px; line-height:1.4}
+.callout b{color:var(--cyan)}
+.gui-wrap{position:relative; width:100%; display:flex; justify-content:center}
+
+/* checklist */
+.checklist{display:grid; grid-template-columns:repeat(3,auto); gap:8px 26px; margin-top:22px;
+  font-family:var(--mono); font-size:14px; color:#9aa6bd; justify-content:center}
+.checklist span::before{content:"✓ "; color:var(--cyan)}
+.cta{font-family:var(--mono); font-size:clamp(14px,1.7vw,18px); color:#bfe9e9; margin-top:8px}
+.cta .muted{color:var(--slate)}
+
+/* tangle / graph svg specifics */
+.tangle{stroke:var(--slate); stroke-width:2; fill:none; opacity:.6}
+.tangle.bad{stroke:var(--coral)}
+.leaf{fill:rgba(110,124,150,.08); stroke:var(--slate); stroke-width:1.5}
+.leaf-lbl{fill:#9aa6bd; font-size:11px; text-anchor:middle; font-family:var(--mono)}
+.shake{animation:shake 2.6s ease-in-out infinite}
+@keyframes shake{0%,86%,100%{transform:none}90%{transform:translateX(-3px) rotate(-.6deg)}94%{transform:translateX(3px) rotate(.6deg)}}
+.drift{animation:drift var(--d,7s) ease-in-out infinite alternate}
+@keyframes drift{from{transform:translate(0,0)}to{transform:translate(var(--dx,12px),var(--dy,-10px))}}
+.qmark{fill:var(--coral); font-size:15px; font-family:var(--mono)}
+
+/* fixed UI */
+#progress{position:fixed; left:0; bottom:0; height:3px; width:0; background:var(--cyan);
+  box-shadow:0 0 10px var(--cyan); z-index:30; transition:width .3s ease}
+#counter{position:fixed; right:18px; bottom:14px; z-index:30; font-family:var(--mono);
+  font-size:12px; color:var(--slate)}
+#hint{position:fixed; left:18px; bottom:13px; z-index:30; font-family:var(--mono);
+  font-size:11px; color:var(--slate); opacity:.8}
+#notes{position:fixed; left:0; right:0; bottom:0; z-index:40; background:#070b16;
+  border-top:1px solid var(--cyan); padding:14px 22px 22px; font-size:15px; color:#c4ccdc;
+  display:none; line-height:1.5}
+#notes.show{display:block}
+#notes .lbl{font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--cyan); display:block; margin-bottom:6px}
+#help{position:fixed; inset:0; z-index:50; background:rgba(5,8,16,.92); display:none;
+  align-items:center; justify-content:center}
+#help.show{display:flex}
+#help .box{border:1px solid var(--chip-outline); border-radius:16px; padding:30px 40px;
+  background:var(--panel); max-width:460px}
+#help h3{font-family:var(--disp); margin:0 0 16px}
+#help table{font-family:var(--mono); font-size:14px; color:#c4ccdc; border-collapse:collapse}
+#help td{padding:5px 14px 5px 0}
+#help kbd{background:#0a1124; border:1px solid var(--chip-outline); border-radius:5px; padding:2px 7px; color:var(--cyan)}
+
+@media (max-width:820px){
+  .stage.two{flex-direction:column; gap:18px}
+  .copy{flex:none; width:100%}
+  .grid6{grid-template-columns:repeat(2,1fr)}
+  .grid4{grid-template-columns:repeat(2,1fr)}
+  .gui-body{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .slide.active{animation:none}
+}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="stars"></div>
+
+<div class="deck" id="deck">
+
+  <!-- 0 — TITLE -->
+  <section class="slide" data-steps="0" aria-label="Title"
+    data-note="A 30-year-old idea from video games that might fix how we build agents. No edges, no router — just a living world of data.">
+    <div class="stage center">
+      <div class="kicker">a lightning talk</div>
+      <h1 class="h-xl">Lang<span class="accent">ECS</span></h1>
+      <p class="tagline">LangGraph.js — but the runtime is a <strong>living ECS world</strong>, not a compiled graph.</p>
+      <div class="visual" style="margin-top:18px">
+        <svg class="scene" viewBox="0 0 760 200" id="sc0" aria-hidden="true">
+          <path id="s0-tr" class="trace" d="M250 70 C 360 50, 430 60, 540 90"/>
+          <circle class="ent" cx="150" cy="110" r="26"/><text class="ent-lbl" x="150" y="115">#1</text>
+          <circle class="ent" cx="300" cy="110" r="26"/><text class="ent-lbl" x="300" y="115">#2</text>
+          <circle class="ent" cx="450" cy="110" r="26"/><text class="ent-lbl" x="450" y="115">#3</text>
+          <g class="chip" id="s0-c1"><rect x="116" y="44" width="68" height="26" rx="7"/><text x="150" y="58">Health</text></g>
+          <g class="chip" id="s0-c2"><rect x="266" y="44" width="68" height="26" rx="7"/><text x="300" y="58">Sprite</text></g>
+          <g class="chip" id="s0-c3"><rect x="416" y="44" width="68" height="26" rx="7"/><text x="450" y="58">State</text></g>
+          <g class="sys" id="s0-sys"><rect x="540" y="80" width="120" height="56" rx="10"/>
+            <text class="sname" x="600" y="104">system</text><text class="squery" x="600" y="123">⟨State⟩</text></g>
+          <text class="quiescent" x="380" y="180">QUIESCENT</text>
+        </svg>
+      </div>
+      <p class="cta" style="margin-top:6px"><span class="muted">Pregel over an open world.</span></p>
+    </div>
+  </section>
+
+  <!-- 1 — GAME TANGLE -->
+  <section class="slide" data-steps="0" aria-label="The class-tree problem"
+    data-note="Old problem; the naive answer is a deep class hierarchy — rigid, and every new combo fights the tree. Games gave up on this.">
+    <div class="kicker">first, a detour into games</div>
+    <div class="stage two wide-copy">
+      <div class="copy">
+        <h2 class="h-lg">A thousand things on screen — without a class tree from hell</h2>
+        <div class="body">
+          <p class="ln">Ships, asteroids, bullets, the player — all moving and colliding.</p>
+          <p class="ln">Naive answer: <code>FlyingEnemyThatShoots extends Enemy extends GameObject</code>…</p>
+          <p class="ln">now make one that also <em>heals</em>. Where does that even go?</p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 540 420" aria-hidden="true">
+          <!-- arcade scene -->
+          <g class="drift" style="--d:6s;--dx:14px;--dy:8px">
+            <path d="M70 70 l16 26 l-16 8 l-16 -8 z" fill="rgba(52,224,224,.18)" stroke="var(--cyan)" stroke-width="1.5"/>
+            <text class="note" x="50" y="118">player</text>
+          </g>
+          <g class="drift" style="--d:8s;--dx:-18px;--dy:14px">
+            <circle cx="180" cy="60" r="17" fill="rgba(110,124,150,.12)" stroke="var(--slate)"/>
+            <text class="note" x="158" y="92">asteroid</text>
+          </g>
+          <g class="drift" style="--d:5s;--dx:10px;--dy:-12px">
+            <circle cx="120" cy="150" r="3.5" fill="var(--cyan)"/><circle cx="135" cy="160" r="3.5" fill="var(--cyan)"/>
+            <text class="note" x="110" y="184">bullets</text>
+          </g>
+          <!-- inheritance tangle -->
+          <g class="shake">
+            <rect class="leaf" x="220" y="40" width="120" height="30" rx="6"/><text class="leaf-lbl" x="280" y="60">GameObject</text>
+            <path class="tangle" d="M280 70 L200 120 M280 70 L360 120 M280 70 L300 120"/>
+            <rect class="leaf" x="150" y="120" width="100" height="28" rx="6"/><text class="leaf-lbl" x="200" y="139">Enemy</text>
+            <rect class="leaf" x="300" y="120" width="120" height="28" rx="6"/><text class="leaf-lbl" x="360" y="139">Projectile</text>
+            <path class="tangle" d="M200 148 L150 200 M200 148 L260 200 M360 148 L320 200 M200 148 L320 200"/>
+            <rect class="leaf" x="100" y="200" width="110" height="28" rx="6"/><text class="leaf-lbl" x="155" y="219">FlyingEnemy</text>
+            <rect class="leaf" x="240" y="200" width="160" height="28" rx="6"/><text class="leaf-lbl" x="320" y="219">EnemyThatShoots</text>
+            <path class="tangle bad" d="M155 228 C 230 280, 130 300, 250 330 M320 228 C 250 290, 360 300, 250 330"/>
+            <rect class="leaf" x="180" y="330" width="140" height="30" rx="6" style="stroke:var(--coral)"/>
+            <text class="leaf-lbl" x="250" y="349" style="fill:#ffbcbc">…that also heals??</text>
+            <text class="qmark" x="120" y="300">where does this go?</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 — ECS THREE NOUNS -->
+  <section class="slide" data-steps="3" aria-label="What ECS is"
+    data-note="Three nouns. No behavior in the data, no data in the id. All logic lives in systems that run over a query.">
+    <div class="kicker">the cure games chose: ECS</div>
+    <div class="stage two">
+      <div class="copy">
+        <h2 class="h-lg">Stop inheriting.<br/>Start <span class="accent">composing</span>.</h2>
+        <div class="body">
+          <p class="ln" data-step="1"><strong>Entity</strong> = just an id.</p>
+          <p class="ln" data-step="2"><strong>Component</strong> = pure data you bolt on.</p>
+          <p class="ln" data-step="3"><strong>System</strong> = logic over a query.</p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 560 380" aria-hidden="true">
+          <g data-step="1">
+            <text class="note" x="80" y="40" style="fill:var(--cyan)">ENTITY</text>
+            <circle class="ent" cx="80" cy="120" r="34"/><text class="ent-lbl" x="80" y="125">#7</text>
+            <text class="note" x="80" y="180" text-anchor="middle">just an id · { }</text>
+          </g>
+          <g data-step="2">
+            <text class="note" x="280" y="40" style="fill:var(--cyan)">COMPONENT</text>
+            <g class="chip show"><rect x="220" y="70" width="120" height="26"/><text x="280" y="84">Position{x,y}</text></g>
+            <g class="chip show"><rect x="220" y="104" width="120" height="26"/><text x="280" y="118">Velocity{dx,dy}</text></g>
+            <g class="chip show"><rect x="220" y="138" width="120" height="26"/><text x="280" y="152">Health{hp}</text></g>
+            <g class="chip show"><rect x="220" y="172" width="120" height="26"/><text x="280" y="186">Sprite</text></g>
+            <g class="chip show"><rect x="220" y="206" width="120" height="26"/><text x="280" y="220">PlayerControlled</text></g>
+          </g>
+          <g data-step="3">
+            <text class="note" x="470" y="40" style="fill:var(--cyan)">SYSTEM</text>
+            <g class="sys"><rect x="400" y="80" width="150" height="62" rx="10"/>
+              <text class="sname" x="475" y="106">MovementSystem</text>
+              <text class="squery" x="475" y="126">⟨Position, Velocity⟩</text></g>
+            <text class="note" x="475" y="172" text-anchor="middle">runs over every match</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 — COMPOSITION / HOMING -->
+  <section class="slide" data-steps="0" aria-label="Composition in action"
+    data-note="The whole magic: behavior is additive. No subclassing. Hold that thought — it repeats in agent-land.">
+    <div class="kicker">composition in action</div>
+    <div class="stage two wide-copy">
+      <div class="copy">
+        <h2 class="h-lg">A thing is just the chips you bolt on</h2>
+        <div class="body">
+          <p class="ln"><code>player</code> = Position + Velocity + Health + Sprite</p>
+          <p class="ln"><code>asteroid</code> = Position + Velocity + Sprite</p>
+          <p class="ln" style="margin-top:1em">Want a <span class="accent">homing</span> asteroid? Add <code>Homing</code>. <strong>Done.</strong></p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 560 400" id="sc3" aria-hidden="true">
+          <circle class="ent" cx="100" cy="90" r="26"/><text class="ent-lbl" x="100" y="95">player</text>
+          <circle class="ent" cx="300" cy="90" r="26"/><text class="ent-lbl" x="300" y="95">asteroid</text>
+          <circle class="ent" cx="470" cy="90" r="26"/><text class="ent-lbl" x="470" y="95">bullet</text>
+          <!-- player chips -->
+          <g class="chip" id="s3-p1"><rect x="40" y="140" width="56" height="22"/><text x="68" y="151">Pos</text></g>
+          <g class="chip" id="s3-p2"><rect x="100" y="140" width="56" height="22"/><text x="128" y="151">Vel</text></g>
+          <g class="chip" id="s3-p3"><rect x="70" y="166" width="64" height="22"/><text x="102" y="177">Health</text></g>
+          <!-- asteroid chips -->
+          <g class="chip" id="s3-a1"><rect x="250" y="140" width="56" height="22"/><text x="278" y="151">Pos</text></g>
+          <g class="chip" id="s3-a2"><rect x="312" y="140" width="56" height="22"/><text x="340" y="151">Vel</text></g>
+          <!-- bullet chips -->
+          <g class="chip" id="s3-b1"><rect x="420" y="140" width="56" height="22"/><text x="448" y="151">Pos</text></g>
+          <g class="chip" id="s3-b2"><rect x="440" y="166" width="64" height="22"/><text x="472" y="177">Damage</text></g>
+          <!-- homing add -->
+          <g class="chip" id="s3-homing"><rect x="276" y="192" width="74" height="24"/><text x="313" y="205">Homing</text></g>
+          <path id="s3-tr" class="trace" d="M313 216 C 330 260, 320 280, 300 300"/>
+          <g class="sys" id="s3-sys"><rect x="200" y="300" width="200" height="60" rx="10"/>
+            <text class="sname" x="300" y="326">HomingSystem</text>
+            <text class="squery" x="300" y="346">⟨Position, Homing⟩</text></g>
+          <circle id="s3-rock" cx="300" cy="90" r="8" fill="rgba(52,224,224,.25)" stroke="var(--cyan)" stroke-width="1.5" opacity="0"/>
+          <text class="cap" id="s3-cap" x="300" y="388" text-anchor="middle">new behavior = one chip, zero refactor</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 — SAME DISEASE (LangGraph) -->
+  <section class="slide" data-steps="0" aria-label="Agents have the same disease"
+    data-note="Rigid wiring — the same disease as the class tree. So… what if we steal the cure?">
+    <div class="kicker">meanwhile, in agent-land…</div>
+    <div class="stage two wide-copy">
+      <div class="copy">
+        <h2 class="h-lg">Wait — we have the <span style="color:var(--coral)">same disease</span></h2>
+        <div class="body">
+          <p class="ln">Graphs of nodes, wired by <strong>edges</strong> and <strong>routers</strong>.</p>
+          <p class="ln">Add a step, a retry, a human pause →<br/>you're <em>rewiring the graph</em>.</p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene shake" viewBox="0 0 540 380" aria-hidden="true">
+          <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0 0 L7 3 L0 6 z" fill="var(--slate)"/></marker>
+            <marker id="ahc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+            <path d="M0 0 L7 3 L0 6 z" fill="var(--coral)"/></marker></defs>
+          <g>
+            <rect class="leaf" x="200" y="30" width="120" height="34" rx="8"/><text class="leaf-lbl" x="260" y="51">START</text>
+            <rect class="leaf" x="200" y="120" width="120" height="34" rx="8"/><text class="leaf-lbl" x="260" y="141">callModel</text>
+            <path class="tangle" d="M260 64 L260 118" marker-end="url(#ah)"/>
+            <polygon class="leaf" points="260,185 330,225 260,265 190,225" /><text class="leaf-lbl" x="260" y="229">router?</text>
+            <path class="tangle" d="M260 154 L260 183" marker-end="url(#ah)"/>
+            <rect class="leaf" x="60" y="290" width="110" height="34" rx="8"/><text class="leaf-lbl" x="115" y="311">tools</text>
+            <rect class="leaf" x="350" y="290" width="120" height="34" rx="8"/><text class="leaf-lbl" x="410" y="311">END</text>
+            <path class="tangle" d="M205 240 L160 288" marker-end="url(#ah)"/>
+            <path class="tangle" d="M315 240 L405 288" marker-end="url(#ah)"/>
+            <path class="tangle" d="M115 290 C 60 200, 150 150, 205 145" marker-end="url(#ah)"/>
+            <!-- the messy re-route -->
+            <path class="tangle bad" d="M330 225 C 470 210, 470 90, 322 50" marker-end="url(#ahc)"/>
+            <path class="tangle bad" d="M260 265 C 150 330, 470 350, 410 326" marker-end="url(#ahc)"/>
+            <text class="qmark" x="350" y="150">+ human approval?</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 — THE LEAP / MAPPING -->
+  <section class="slide" data-steps="5" aria-label="The mapping: ECS for agents"
+    data-note="Same three nouns, new domain. Because state is just data, a snapshot is plain JSON — remember that, it pays off in the demo.">
+    <div class="kicker">the leap — the “ohhh”</div>
+    <div class="stage two">
+      <div class="copy">
+        <h2 class="h-md">An agent is just a <span class="accent">thing</span> with state &amp; logic</h2>
+        <div class="footnote" data-step="5">components hold <b>only JSON</b>. behavior — models, tools, DB —
+          registers as a <b>named resource</b>: <code>ModelRef("model:main")</code>.
+          that one rule is why a snapshot is plain JSON any process can resume.</div>
+      </div>
+      <div class="visual">
+        <table class="rosetta">
+          <tr data-step="1"><td class="k">Entity</td><td class="arrow">→</td><td class="v">an agent · task · shared blackboard (just an id)</td></tr>
+          <tr data-step="2"><td class="k">Component</td><td class="arrow">→</td><td class="v"><strong>all</strong> state: Messages · ModelRef · PendingToolCalls · errors · interrupts</td></tr>
+          <tr data-step="3"><td class="k">System</td><td class="arrow">→</td><td class="v">callLLM · executeTools · supervisor · healer</td></tr>
+          <tr data-step="4"><td class="k">add / remove a component</td><td class="arrow">→</td><td class="v">what <em>triggers</em> systems (this replaces edges &amp; routers)</td></tr>
+          <tr data-step="4"><td class="k">World</td><td class="arrow">→</td><td class="v">entities + systems + resources + scheduler + snapshot</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 — THE TWIST -->
+  <section class="slide" data-steps="0" aria-label="The reactive twist"
+    data-note="The heart of it: foreign dirt wakes systems; your own writes don't; silence means done. No router anywhere.">
+    <div class="kicker">the twist — vs games AND vs LangGraph</div>
+    <div class="stage center">
+      <h2 class="h-lg">Kill the tick loop.<br/>Kill the <span class="accent">edges</span>.</h2>
+      <p class="body" style="text-align:center; max-width:40em">
+        A <code>(system, entity)</code> pair fires <strong>only</strong> on a <em>foreign</em> write to a component it watches.
+        Its own writes never re-trigger it. Control flow <strong>emerges</strong>; the run ends at <strong>quiescence</strong>.</p>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 760 360" id="sc6" aria-hidden="true">
+          <circle class="ent" cx="150" cy="190" r="40"/><text class="ent-lbl" x="150" y="195">#agent</text>
+          <g class="chip" id="s6-msg"><rect x="96" y="120" width="108" height="26"/><text x="150" y="133">Messages</text></g>
+          <g class="chip show"><rect x="96" y="236" width="108" height="26"/><text x="150" y="249">ModelRef</text></g>
+          <g class="chip" id="s6-user"><rect x="80" y="56" width="140" height="28"/><text x="150" y="70">user message</text></g>
+          <path id="s6-trA" class="trace" d="M204 133 C 320 120, 360 150, 470 168"/>
+          <path id="s6-trB" class="trace" d="M470 210 C 360 250, 300 180, 204 140"/>
+          <g class="sys" id="s6-sys"><rect x="470" y="150" width="200" height="72" rx="10"/>
+            <text class="sname" x="570" y="180">callLLM</text>
+            <text class="squery" x="570" y="202">⟨Messages⟩</text></g>
+          <g class="xmark" id="s6-x"><line x1="318" y1="208" x2="342" y2="232"/><line x1="342" y1="208" x2="318" y2="232"/></g>
+          <text class="cap" id="s6-cap" x="380" y="270" text-anchor="middle">self-write excluded → no $0.10/step infinite loop</text>
+          <text class="quiescent" x="380" y="330">QUIESCENT</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 — SIX FEATURES -->
+  <section class="slide" data-steps="6" aria-label="Six things you get for free"
+    data-note="These aren't bolted-on features — they all fall out of one rule: there is no execution state outside components.">
+    <div class="kicker">because state is data, not code…</div>
+    <h2 class="h-md" style="margin-bottom:18px">Six things you get for <span class="accent">free</span></h2>
+    <div class="grid6">
+      <div class="fcard c-cyan" data-step="1"><div class="fnum">01</div><div class="fh">Emergent flow</div><div class="fd">No edges, no router. Systems fire on dirty data; the run ends at quiescence.</div></div>
+      <div class="fcard c-coral" data-step="2"><div class="fnum">02</div><div class="fh">Errors as components</div><div class="fd">A throw appends a <code>SystemError</code> chip. Failure becomes queryable state.</div></div>
+      <div class="fcard c-amber" data-step="3"><div class="fnum">03</div><div class="fh">Kill &amp; resume</div><div class="fd">Every step boundary is JSON. Pause survives process death by construction.</div></div>
+      <div class="fcard c-cyan" data-step="4"><div class="fnum">04</div><div class="fh">Time travel</div><div class="fd">Rewind &amp; fork ≈ 3 lines. A primitive, not a replay reconstruction.</div></div>
+      <div class="fcard c-cyan" data-step="5"><div class="fnum">05</div><div class="fh">Deterministic parallelism</div><div class="fd">Pairs commit at a barrier; reducers merge fan-in. No silent last-write-wins.</div></div>
+      <div class="fcard c-cyan" data-step="6"><div class="fnum">06</div><div class="fh">Flight recorder</div><div class="fd">Every step logs scheduled pairs, vetoes, writes &amp; timings. “Why didn't it fire?”</div></div>
+    </div>
+  </section>
+
+  <!-- 8 — REACT LOOP -->
+  <section class="slide" data-steps="0" aria-label="The ReAct loop has zero edges"
+    data-note="The classic agent loop — and there's not a single edge in the diagram. The data does the routing.">
+    <div class="kicker">feature, in motion</div>
+    <div class="stage two wide-copy">
+      <div class="copy">
+        <h2 class="h-md">The ReAct loop has <span class="accent">ZERO edges</span></h2>
+        <div class="body">
+          <p class="ln">reply w/ tool calls → dirties <code>PendingToolCalls</code> → wakes <code>executeTools</code></p>
+          <p class="ln">tool result → <code>Messages</code> → <em>foreign dirt</em> → wakes <code>callLLM</code></p>
+          <p class="ln">reply with no tool calls → world goes quiet → <strong>done</strong>.</p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 600 360" id="sc8" aria-hidden="true">
+          <g class="sys" id="s8-llm"><rect x="40" y="150" width="180" height="68" rx="10"/>
+            <text class="sname" x="130" y="178">callLLM</text><text class="squery" x="130" y="200">⟨Messages⟩</text></g>
+          <g class="sys" id="s8-tools"><rect x="380" y="150" width="180" height="68" rx="10"/>
+            <text class="sname" x="470" y="178">executeTools</text><text class="squery" x="470" y="200">⟨PendingToolCalls⟩</text></g>
+          <g class="chip" id="s8-ptc"><rect x="238" y="70" width="124" height="26"/><text x="300" y="83">PendingToolCalls</text></g>
+          <g class="chip" id="s8-msg"><rect x="252" y="272" width="96" height="26"/><text x="300" y="285">Messages</text></g>
+          <path id="s8-t1" class="trace" d="M210 158 C 250 120, 250 100, 282 92"/>
+          <path id="s8-t2" class="trace" d="M318 92 C 360 100, 360 120, 392 158"/>
+          <path id="s8-t3" class="trace" d="M392 210 C 360 250, 350 268, 320 280"/>
+          <path id="s8-t4" class="trace" d="M280 280 C 250 268, 240 250, 210 210"/>
+          <text class="cap show" x="300" y="180" text-anchor="middle" style="fill:var(--cyan); font-size:16px">0 edges.</text>
+          <text class="cap show" x="300" y="202" text-anchor="middle" style="fill:var(--slate); font-size:13px">the loop is emergent</text>
+          <text class="quiescent" x="300" y="340" style="font-size:26px">QUIESCENT</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 — ERRORS / HEAL -->
+  <section class="slide" data-steps="0" aria-label="Errors are components"
+    data-note="No try/catch spaghetti. Failure is data another system can query and fix — you'll see this exact heal in the Timeline.">
+    <div class="kicker">feature, in motion</div>
+    <div class="stage two wide-copy">
+      <div class="copy">
+        <h2 class="h-md">Errors are components.<br/>Healing is a <span class="accent">system</span>.</h2>
+        <div class="body">
+          <p class="ln">A throwing system isn't a crashed run.</p>
+          <p class="ln">The engine <strong>discards</strong> its writes → appends a <code>SystemError</code> chip.</p>
+          <p class="ln">A healer watches <code>⟨SystemError⟩</code>, retries, and it <strong>auto-clears</strong>.</p>
+        </div>
+      </div>
+      <div class="visual">
+        <svg class="scene" viewBox="0 0 560 380" id="sc9" aria-hidden="true">
+          <circle class="ent" cx="120" cy="190" r="38"/><text class="ent-lbl" x="120" y="195">#worker</text>
+          <g class="chip err" id="s9-err"><rect x="60" y="116" width="120" height="28"/><text x="120" y="131">SystemError</text></g>
+          <path id="s9-t1" class="trace" d="M158 175 C 250 150, 300 140, 360 138"/>
+          <g class="sys" id="s9-proc"><rect x="360" y="110" width="180" height="60" rx="10"/>
+            <text class="sname" x="450" y="136">processJobs</text><text class="squery" x="450" y="156">⟨Jobs⟩</text></g>
+          <g class="chip" id="s9-write"><rect x="380" y="190" width="140" height="24"/><text x="450" y="203">buffered write</text></g>
+          <g class="xmark" id="s9-writex"><line x1="438" y1="196" x2="462" y2="208"/><line x1="462" y1="196" x2="438" y2="208"/></g>
+          <path id="s9-t2" class="trace" d="M158 205 C 250 260, 300 280, 360 290"/>
+          <g class="sys" id="s9-retry"><rect x="360" y="262" width="180" height="60" rx="10"/>
+            <text class="sname" x="450" y="288">retry</text><text class="squery" x="450" y="308">⟨SystemError⟩</text></g>
+          <text class="cap" id="s9-cap" x="280" y="368" text-anchor="middle">failure → queryable state → auto-cleared</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 — SAVE / FORK / PAUSE / MERGE -->
+  <section class="slide" data-steps="4" aria-label="Save, fork, pause, merge"
+    data-note="Pause survives process death by construction. Time travel is a primitive. Parallelism is deterministic — conflicts throw, never silently lose data.">
+    <div class="kicker">and because state is plain JSON…</div>
+    <h2 class="h-md" style="margin-bottom:18px">Save · Fork · Pause · Merge</h2>
+    <div class="grid4">
+      <div class="mcard t-cyan" data-step="1"><span class="tag">save / resume</span>
+        <h3 style="margin-top:8px">Kill the process</h3>
+        <p>Resume in another — every step boundary is JSON on disk. Not an opaque replay log.</p></div>
+      <div class="mcard t-amber" data-step="2"><span class="tag">pause</span>
+        <h3 style="margin-top:8px">Human-in-the-loop</h3>
+        <p>Write <code>AwaitingHuman</code> → quiescent <code>'pending'</code>. No special machinery.</p></div>
+      <div class="mcard t-cyan" data-step="3"><span class="tag">time travel</span>
+        <h3 style="margin-top:8px">Rewind &amp; fork</h3>
+        <p>Load an earlier snapshot (≈ 3 lines). The original timeline is untouched.</p></div>
+      <div class="mcard t-coral" data-step="4"><span class="tag">barrier</span>
+        <h3 style="margin-top:8px">Deterministic fan-in</h3>
+        <p>Reducers merge concurrent writes; a reducer-less double-write <strong>throws</strong>.</p></div>
+    </div>
+    <p class="cta" data-step="4" style="margin-top:20px"><span class="muted">flight recorder — every step logs scheduled pairs, when-vetoes, writes, timings.</span></p>
+  </section>
+
+  <!-- 11 — DEMO: REFUND -->
+  <section class="slide" data-steps="0" aria-label="Demo: the support desk"
+    data-note="Everything you just heard, on one screen. Watch it find order 1042, then stop dead waiting for a human — nothing lost.">
+    <div class="kicker">now watch it — live, in devtools</div>
+    <h2 class="h-md" style="margin-bottom:14px">The Support Desk: refund order <span class="accent">#1042</span></h2>
+    <div class="gui-wrap">
+      <div class="gui">
+        <div class="gui-chrome"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="url">localhost:4173 · LangECS DevTools · model: deterministic policy model (no API key)</span></div>
+        <div class="gui-body">
+          <div class="panel">
+            <h4>Inspector · #support</h4>
+            <div class="bubble user">Please refund order #1042 — it arrived broken.</div>
+            <div class="bubble tool">→ lookupOrder({"orderId":"1042"})<br/>← #1042 · Mechanical keyboard · $42.50 · delivered</div>
+            <div class="bubble tool" style="border-color:var(--amber); background:rgba(255,179,71,.07); color:#ffd9a6">→ issueRefund · <span class="lock">🔒 needsApproval</span></div>
+          </div>
+          <div class="panel">
+            <h4>Systems</h4>
+            <svg class="scene" viewBox="0 0 320 220" id="sc11" style="max-height:200px" aria-hidden="true">
+              <g class="chip" id="s11-user"><rect x="8" y="14" width="96" height="24"/><text x="56" y="26">user msg</text></g>
+              <g class="sys" id="s11-llm"><rect x="14" y="70" width="120" height="52" rx="9"/>
+                <text class="sname" x="74" y="92" style="font-size:13px">callLLM</text>
+                <text class="squery" x="74" y="110" style="font-size:11px">⟨Messages⟩</text></g>
+              <g class="chip" id="s11-ptc"><rect x="150" y="40" width="150" height="24"/><text x="225" y="52">PendingToolCalls</text></g>
+              <g class="sys vetoed" id="s11-tools"><rect x="180" y="96" width="128" height="54" rx="9"/>
+                <text class="sname" x="244" y="116" style="font-size:12px">executeTools 🔒</text>
+                <text class="squery" x="244" y="134" style="font-size:10px">Not(AwaitingHuman)</text></g>
+              <path id="s11-t1" class="trace" d="M56 38 L74 68"/>
+              <path id="s11-t2" class="trace" d="M134 92 C 160 70, 170 60, 198 58"/>
+              <path id="s11-t3" class="trace" d="M225 64 C 235 78, 240 84, 244 94"/>
+              <text class="note" x="160" y="180" text-anchor="middle" style="font-size:11px; fill:var(--amber)">guard veto: approval pending</text>
+            </svg>
+          </div>
+          <div class="panel">
+            <h4>Interrupts</h4>
+            <div class="badge"><span class="blip"></span> AwaitingHuman · status: pending</div>
+            <p class="body" style="font-size:13px; margin-top:14px">issueRefund parked before running.<br/>Nothing lost — the world just went quiet.</p>
+            <div class="bubble bot" style="margin-top:10px; font-size:12px; font-family:var(--mono)">approve&nbsp;&nbsp;<span style="color:var(--cyan)">{"approved": true}</span></div>
+            <div class="bubble bot" style="font-size:12px; font-family:var(--mono)">deny&nbsp;&nbsp;<span style="color:var(--coral)">{"approved": false, …}</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 — DEMO: POKE -->
+  <section class="slide" data-steps="5" aria-label="Demo: poke the living world"
+    data-note="Every abstract feature is now visible and pokeable. I'll approve the refund, show the worker heal, and a time-travel fork. That's the payoff.">
+    <div class="kicker">poke the living world</div>
+    <h2 class="h-md" style="margin-bottom:14px">Approve it. Heal it. Edit it. Rewind it.</h2>
+    <p class="body" style="margin:-4px 0 16px; max-width:46em">Every abstract feature, now visible and pokeable in one screen.</p>
+    <div class="gui-wrap">
+      <div class="gui compact" style="max-width:1040px">
+        <div class="gui-chrome"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="url">localhost:4173 · LangECS DevTools</span></div>
+        <div class="gui-body" style="grid-template-columns:repeat(5,1fr)">
+          <div class="panel" data-step="1"><h4>① Interrupts</h4>
+            <div class="bubble bot" style="font-size:12px; font-family:var(--mono)">Approve <span style="color:var(--cyan)">▸</span></div>
+            <p class="body" style="font-size:12px; margin-top:8px"><code>{approved:true}</code> resumes → refund <strong>done</strong>. Or deny with a reason.</p></div>
+          <div class="panel" data-step="2"><h4>② Timeline</h4>
+            <p class="body" style="font-size:12px">A worker job <span style="color:var(--coral)">fails once</span> → <code>SystemError</code> → retry → <span style="color:var(--cyan)">auto-clears</span>.</p></div>
+          <div class="panel" data-step="3"><h4>③ Inspector</h4>
+            <p class="body" style="font-size:12px">Edit an order's <code>amount</code> in the live OrderBook; ask again — the tool reads your edit.</p></div>
+          <div class="panel" data-step="4"><h4>④ Time Travel</h4>
+            <p class="body" style="font-size:12px">Restore the boundary <em>before</em> the refund → replay differently as a <strong>fork</strong>.</p></div>
+          <div class="panel" data-step="5"><h4>⑤ Traces</h4>
+            <p class="body" style="font-size:12px">OTel spans: run → steps → systems → chat / tool, with <strong>token counts</strong>.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 — CLOSING -->
+  <section class="slide" data-steps="0" aria-label="Closing"
+    data-note="Games solved the tangle decades ago. We just stole the cure for agents. Let's leave the slides and poke the real thing.">
+    <div class="stage center">
+      <div class="kicker">steal the fix</div>
+      <h2 class="h-lg">Stop wiring graphs.<br/>Start <span class="accent">growing worlds</span>.</h2>
+      <div class="visual" style="margin-top:6px">
+        <svg class="scene" viewBox="0 0 720 180" id="sc13" style="max-height:30vh" aria-hidden="true">
+          <circle class="ent" cx="150" cy="90" r="30"/><text class="ent-lbl" x="150" y="95">#1</text>
+          <circle class="ent" cx="360" cy="90" r="30"/><text class="ent-lbl" x="360" y="95">#2</text>
+          <circle class="ent" cx="570" cy="90" r="30"/><text class="ent-lbl" x="570" y="95">#3</text>
+          <g class="chip show"><rect x="100" y="36" width="62" height="22"/><text x="131" y="47">Messages</text></g>
+          <g class="chip show"><rect x="166" y="36" width="56" height="22"/><text x="194" y="47">Model</text></g>
+          <g class="chip show"><rect x="318" y="36" width="56" height="22"/><text x="346" y="47">Inbox</text></g>
+          <g class="chip show"><rect x="378" y="36" width="64" height="22"/><text x="410" y="47">Task</text></g>
+          <g class="chip show"><rect x="528" y="36" width="58" height="22"/><text x="557" y="47">Tools</text></g>
+          <g class="chip" id="s13-spark"><rect x="588" y="36" width="78" height="22"/><text x="627" y="47">user msg</text></g>
+          <path id="s13-t1" class="trace" d="M180 90 L330 90"/>
+          <path id="s13-t2" class="trace" d="M390 90 L540 90"/>
+          <text class="quiescent" x="360" y="160" style="font-size:22px">QUIESCENT</text>
+        </svg>
+      </div>
+      <p class="cta"><code>pnpm -C examples devtools-demo</code> <span class="muted">(no API key needed)</span></p>
+      <p class="tagline" style="text-align:center; max-width:34em; margin-top:14px">
+        LangGraph is Pregel over a closed graph. <strong>LangECS is Pregel over an open world.</strong></p>
+      <div class="checklist">
+        <span>Emergent flow</span><span>Errors as data</span><span>Kill &amp; resume</span>
+        <span>Time travel</span><span>Deterministic parallelism</span><span>Flight recorder</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div id="progress"></div>
+<div id="counter">1 / 14</div>
+<div id="hint">→ / space · ? help</div>
+<div id="notes"><span class="lbl">speaker notes</span><span id="notes-text"></span></div>
+<div id="help"><div class="box">
+  <h3>Keys</h3>
+  <table>
+    <tr><td><kbd>→</kbd> <kbd>Space</kbd></td><td>next / reveal</td></tr>
+    <tr><td><kbd>←</kbd></td><td>back</td></tr>
+    <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>first / last</td></tr>
+    <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>jump to slide</td></tr>
+    <tr><td><kbd>f</kbd></td><td>fullscreen</td></tr>
+    <tr><td><kbd>n</kbd></td><td>speaker notes</td></tr>
+    <tr><td><kbd>?</kbd></td><td>this help</td></tr>
+  </table>
+</div></div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---- starfield ---- */
+  (function(){
+    var s = document.getElementById('stars'), html = '';
+    for(var i=0;i<120;i++){
+      var x=Math.random()*100, y=Math.random()*100, d=(3+Math.random()*5).toFixed(1), del=(Math.random()*5).toFixed(1);
+      var sz=(Math.random()<0.2?2.5:1.4).toFixed(1);
+      html += '<i style="left:'+x.toFixed(2)+'%;top:'+y.toFixed(2)+'%;width:'+sz+'px;height:'+sz+'px;--tw:'+d+'s;animation-delay:'+del+'s"></i>';
+    }
+    s.innerHTML = html;
+  })();
+
+  var slides = [].slice.call(document.querySelectorAll('.slide'));
+  var n = slides.length;
+  var maxSteps = slides.map(function(s){ return parseInt(s.dataset.steps||'0',10); });
+  var stepState = slides.map(function(){ return 0; });
+  var cur = 0, animGen = 0;
+  var progress = document.getElementById('progress');
+  var counter = document.getElementById('counter');
+  var notes = document.getElementById('notes');
+  var notesText = document.getElementById('notes-text');
+  var help = document.getElementById('help');
+
+  function applySteps(i){
+    var st = stepState[i];
+    var els = slides[i].querySelectorAll('[data-step]');
+    for(var j=0;j<els.length;j++){
+      var k = parseInt(els[j].dataset.step,10);
+      els[j].classList.toggle('revealed', k<=st);
+    }
+  }
+  function activate(i){
+    slides[cur].classList.remove('active');
+    cur = i;
+    slides[cur].classList.add('active');
+    applySteps(cur);
+    progress.style.width = ((cur+1)/n*100)+'%';
+    counter.textContent = (cur+1)+' / '+n;
+    notesText.textContent = slides[cur].dataset.note || '';
+    try{ history.replaceState(null,'','#'+(cur+1)); }catch(e){}
+    animGen++;
+    var fn = SCENES[cur];
+    if(fn && !reduce) fn(animGen);
+    else if(fn && reduce) fn(animGen); // scenes self-handle reduced motion (set static state)
+  }
+  function goTo(i, fromLeft){
+    i = Math.max(0, Math.min(n-1, i));
+    if(i===cur && fromLeft===undefined) return;
+    stepState[i] = fromLeft ? maxSteps[i] : 0;
+    activate(i);
+  }
+  function next(){
+    if(stepState[cur] < maxSteps[cur]){ stepState[cur]++; applySteps(cur); }
+    else if(cur < n-1){ goTo(cur+1, false); }
+  }
+  function prev(){
+    if(stepState[cur] > 0){ stepState[cur]--; applySteps(cur); }
+    else if(cur > 0){ goTo(cur-1, true); }
+  }
+
+  document.addEventListener('keydown', function(e){
+    if(help.classList.contains('show') && e.key!=='?' && e.key!=='Escape'){ help.classList.remove('show'); }
+    switch(e.key){
+      case 'ArrowRight': case 'PageDown': case ' ': case 'Spacebar':
+        e.preventDefault(); next(); break;
+      case 'ArrowLeft': case 'PageUp':
+        e.preventDefault(); prev(); break;
+      case 'ArrowDown': e.preventDefault(); goTo(cur+1,false); break;
+      case 'ArrowUp': e.preventDefault(); goTo(cur-1,true); break;
+      case 'Home': e.preventDefault(); goTo(0,false); break;
+      case 'End': e.preventDefault(); goTo(n-1,false); break;
+      case 'n': case 'N': notes.classList.toggle('show'); break;
+      case 'f': case 'F':
+        if(!document.fullscreenElement){ (document.documentElement.requestFullscreen||function(){})(); }
+        else { (document.exitFullscreen||function(){})(); } break;
+      case '?': help.classList.toggle('show'); break;
+      case 'Escape': help.classList.remove('show'); notes.classList.remove('show'); break;
+      default:
+        if(/^[0-9]$/.test(e.key)){ var d=parseInt(e.key,10); if(d>=1 && d<=n) goTo(d-1,false); }
+    }
+  });
+
+  /* click halves to navigate (ignore UI overlays) */
+  document.getElementById('deck').addEventListener('click', function(e){
+    if(help.classList.contains('show')) return;
+    if(e.clientX > window.innerWidth*0.5) next(); else prev();
+  });
+
+  /* ============ animation helpers ============ */
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function q(id){ return document.getElementById(id); }
+  function show(el){ if(el) el.classList.add('show'); }
+  function hide(el){ if(el){ el.classList.remove('show','live'); } }
+  function live(el){ if(el){ el.classList.add('show','live'); } }
+  function cool(el){ if(el) el.classList.remove('live'); }
+  function fire(el){ if(el) el.classList.add('firing'); }
+  function calm(el){ if(el) el.classList.remove('firing'); }
+  function showCls(el,c){ if(el) el.classList.add(c); }
+  function hideCls(el,c){ if(el) el.classList.remove(c); }
+
+  function drawTrace(el, dur){
+    if(!el) return;
+    var L = el.getTotalLength();
+    el.style.transition = 'none';
+    el.style.strokeDasharray = L+' '+L;
+    el.style.strokeDashoffset = L;
+    el.classList.add('live'); el.classList.remove('dead');
+    el.getBoundingClientRect();
+    el.style.transition = 'stroke-dashoffset '+dur+'ms ease-in-out';
+    el.style.strokeDashoffset = '0';
+  }
+  function resetTrace(el){
+    if(!el) return;
+    var L = el.getTotalLength();
+    el.style.transition = 'none';
+    el.style.strokeDasharray = L+' '+L;
+    el.style.strokeDashoffset = L;
+    el.classList.remove('live','dead');
+  }
+  function deadTrace(el){ if(el){ el.classList.remove('live'); el.classList.add('dead'); } }
+
+  function quiesce(root){
+    var f = root.querySelectorAll('.firing'); for(var i=0;i<f.length;i++) f[i].classList.remove('firing');
+    var c = root.querySelectorAll('.chip.live'); for(var j=0;j<c.length;j++) c[j].classList.remove('live');
+    var wm = root.querySelector('.quiescent'); if(wm) wm.classList.add('show');
+  }
+  function unquiesce(root){ var wm = root.querySelector('.quiescent'); if(wm) wm.classList.remove('show'); }
+
+  /* a guard tied to the current animation generation + slide visibility */
+  function guarder(gen, root){ return function(){ return gen===animGen && root && root.classList.contains('active'); }; }
+
+  /* ============ scenes ============ */
+  var SCENES = {};
+
+  /* 0 — title */
+  SCENES[0] = function(gen){
+    var root = slides[0]; var ok = guarder(gen, root);
+    var chips=[q('s0-c1'),q('s0-c2'),q('s0-c3')], tr=q('s0-tr'), sys=q('s0-sys');
+    function reset(){ chips.forEach(hide); resetTrace(tr); calm(sys); unquiesce(root); }
+    if(reduce){ reset(); chips.forEach(show); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(500); if(!ok()) return;
+        for(var i=0;i<chips.length;i++){ live(chips[i]); await sleep(360); if(!ok()) return; chips[i].classList.remove('live'); }
+        await sleep(150); if(!ok()) return;
+        drawTrace(tr, 700); await sleep(720); if(!ok()) return;
+        fire(sys); await sleep(700); if(!ok()) return;
+        quiesce(root); await sleep(2400); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* 3 — composition / homing */
+  SCENES[3] = function(gen){
+    var root = slides[3]; var ok = guarder(gen, root);
+    var base=['s3-p1','s3-p2','s3-p3','s3-a1','s3-a2','s3-b1','s3-b2'].map(q);
+    var homing=q('s3-homing'), tr=q('s3-tr'), sys=q('s3-sys'), rock=q('s3-rock'), cap=q('s3-cap');
+    function reset(){ base.forEach(hide); hide(homing); resetTrace(tr); calm(sys);
+      if(cap) cap.classList.remove('show');
+      if(rock){ rock.style.transition='none'; rock.style.offsetDistance='0%'; rock.style.transform='none'; rock.style.opacity='0'; } }
+    if(reduce){ reset(); base.forEach(show); show(homing); fire(sys); if(cap)cap.classList.add('show'); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(450); if(!ok()) return;
+        for(var i=0;i<base.length;i++){ show(base[i]); await sleep(150); if(!ok()) return; }
+        await sleep(450); if(!ok()) return;
+        live(homing); await sleep(450); if(!ok()) return;
+        drawTrace(tr, 650); await sleep(680); if(!ok()) return;
+        fire(sys); if(cap) cap.classList.add('show');
+        if(rock){ rock.style.opacity='1'; rock.getBoundingClientRect();
+          try{ rock.style.offsetPath="path('M300 90 Q 210 30 100 90')"; rock.style.offsetRotate='0deg';
+               rock.style.transition='offset-distance 1300ms ease-in'; rock.style.offsetDistance='100%'; }
+          catch(e){ rock.style.transition='transform 1300ms ease-in'; rock.style.transform='translate(-200px,0)'; } }
+        await sleep(1900); if(!ok()) return;
+        homing.classList.remove('live');
+        await sleep(900); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* 6 — the twist (signature) */
+  SCENES[6] = function(gen){
+    var root = slides[6]; var ok = guarder(gen, root);
+    var msg=q('s6-msg'), user=q('s6-user'), trA=q('s6-trA'), trB=q('s6-trB'), sys=q('s6-sys'), x=q('s6-x'), cap=q('s6-cap');
+    function reset(){ hide(msg); hide(user); resetTrace(trA); resetTrace(trB); calm(sys);
+      if(x)x.classList.remove('show'); if(cap)cap.classList.remove('show'); unquiesce(root); }
+    if(reduce){ reset(); show(user); live(msg); fire(sys); deadTrace(trB); if(x)x.classList.add('show'); if(cap)cap.classList.add('show'); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(600); if(!ok()) return;
+        live(user); await sleep(650); if(!ok()) return;      // foreign write lands
+        live(msg); user.classList.remove('live'); await sleep(250); if(!ok()) return;
+        drawTrace(trA, 750); await sleep(780); if(!ok()) return;  // pulse to callLLM
+        fire(sys); await sleep(750); if(!ok()) return;            // ignite
+        drawTrace(trB, 700); await sleep(720); if(!ok()) return;  // self-write loopback
+        deadTrace(trB); if(x)x.classList.add('show'); if(cap)cap.classList.add('show'); // dead-end
+        await sleep(1500); if(!ok()) return;
+        quiesce(root); await sleep(2600); if(!ok()) return;       // quiescence
+      }
+    })();
+  };
+
+  /* 8 — ReAct loop */
+  SCENES[8] = function(gen){
+    var root = slides[8]; var ok = guarder(gen, root);
+    var llm=q('s8-llm'), tools=q('s8-tools'), ptc=q('s8-ptc'), msg=q('s8-msg');
+    var t1=q('s8-t1'), t2=q('s8-t2'), t3=q('s8-t3'), t4=q('s8-t4');
+    function reset(){ calm(llm); calm(tools); hide(ptc); hide(msg);
+      [t1,t2,t3,t4].forEach(resetTrace); unquiesce(root); }
+    if(reduce){ reset(); fire(llm); live(ptc); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(500); if(!ok()) return;
+        for(var c=0;c<2;c++){
+          fire(llm); await sleep(520); if(!ok()) return;
+          drawTrace(t1, 480); live(ptc); await sleep(520); if(!ok()) return;
+          drawTrace(t2, 480); calm(llm); await sleep(500); if(!ok()) return;
+          fire(tools); cool(ptc); await sleep(520); if(!ok()) return;
+          drawTrace(t3, 480); live(msg); await sleep(520); if(!ok()) return;
+          drawTrace(t4, 480); calm(tools); await sleep(500); if(!ok()) return;
+          resetTrace(t1); resetTrace(t2); resetTrace(t3); resetTrace(t4); cool(msg); hide(ptc); hide(msg);
+        }
+        // tool-less reply → quiesce
+        fire(llm); await sleep(650); if(!ok()) return;
+        quiesce(root); await sleep(2200); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* 9 — errors / heal */
+  SCENES[9] = function(gen){
+    var root = slides[9]; var ok = guarder(gen, root);
+    var err=q('s9-err'), t1=q('s9-t1'), proc=q('s9-proc'), wr=q('s9-write'), wx=q('s9-writex'), t2=q('s9-t2'), retry=q('s9-retry'), cap=q('s9-cap');
+    function reset(){ hide(err); err.classList.remove('dead'); resetTrace(t1); resetTrace(t2);
+      calm(proc); calm(retry); hide(wr); if(wx)wx.classList.remove('show'); if(cap)cap.classList.remove('show'); }
+    if(reduce){ reset(); show(err); err.classList.add('err'); fire(retry); if(cap)cap.classList.add('show'); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(500); if(!ok()) return;
+        drawTrace(t1, 500); await sleep(540); if(!ok()) return;
+        fire(proc); await sleep(450); if(!ok()) return;
+        // throw: show buffered write then cross it out, proc flashes coral
+        show(wr); proc.querySelector('rect').style.stroke='var(--coral)'; await sleep(450); if(!ok()) return;
+        if(wx) wx.classList.add('show'); wr.classList.add('dead'); calm(proc);
+        proc.querySelector('rect').style.stroke=''; await sleep(350); if(!ok()) return;
+        show(err); await sleep(800); if(!ok()) return;     // SystemError chip (coral)
+        drawTrace(t2, 550); await sleep(580); if(!ok()) return;
+        fire(retry); await sleep(800); if(!ok()) return;    // healer fires
+        calm(retry); err.classList.add('dead'); if(cap)cap.classList.add('show');
+        await sleep(700); if(!ok()) return; hide(err);
+        await sleep(900); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* 11 — demo refund mini-flow */
+  SCENES[11] = function(gen){
+    var root = slides[11]; var ok = guarder(gen, root);
+    var user=q('s11-user'), llm=q('s11-llm'), ptc=q('s11-ptc'), tools=q('s11-tools');
+    var t1=q('s11-t1'), t2=q('s11-t2'), t3=q('s11-t3');
+    function reset(){ hide(user); hide(ptc); calm(llm); [t1,t2,t3].forEach(resetTrace); }
+    if(reduce){ reset(); live(user); fire(llm); live(ptc); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(700); if(!ok()) return;
+        live(user); await sleep(500); if(!ok()) return;
+        drawTrace(t1, 420); await sleep(450); if(!ok()) return;
+        fire(llm); user.classList.remove('live'); await sleep(550); if(!ok()) return;
+        drawTrace(t2, 420); live(ptc); calm(llm); await sleep(500); if(!ok()) return;
+        drawTrace(t3, 420); await sleep(450); if(!ok()) return;     // dirt reaches executeTools
+        // executeTools stays vetoed (amber, padlock) — pulse halts. hold on the interrupt.
+        deadTrace(t3); cool(ptc); await sleep(2200); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* 13 — closing ripple */
+  SCENES[13] = function(gen){
+    var root = slides[13]; var ok = guarder(gen, root);
+    var spark=q('s13-spark'), t1=q('s13-t1'), t2=q('s13-t2');
+    function reset(){ hide(spark); resetTrace(t1); resetTrace(t2); unquiesce(root); }
+    if(reduce){ reset(); return; }
+    (async function loop(){
+      while(ok()){
+        reset(); await sleep(900); if(!ok()) return;
+        live(spark); await sleep(500); if(!ok()) return;
+        drawTrace(t2, 600); await sleep(420); if(!ok()) return;
+        drawTrace(t1, 600); spark.classList.remove('live'); await sleep(650); if(!ok()) return;
+        quiesce(root); await sleep(2600); if(!ok()) return;
+      }
+    })();
+  };
+
+  /* ---- boot: honor #N deep-link ---- */
+  var start = 0;
+  var m = (location.hash||'').match(/^#(\d+)$/);
+  if(m){ var d = parseInt(m[1],10)-1; if(d>=0 && d<n) start = d; }
+  slides[0].classList.remove('active');
+  cur = 0;
+  goTo(start, false);
+})();
+</script>
+</body>
+</html>
