@@ -30,6 +30,19 @@ export {
   type Validator,
 } from './extract';
 export { ask, lastAssistant, sendMessage, userMessage } from './helpers';
+export {
+  definePrompts,
+  inMemoryRegistry,
+  PROMPTS_RESOURCE,
+  PromptRef,
+  type PromptRegistry,
+  type PromptTemplate,
+  PromptVars,
+  RenderedPrompt,
+  registerPrompts,
+  renderSlots,
+  resolvePrompt,
+} from './prompts';
 export { type ReactAgentOptions, reactAgent } from './react';
 export { callLLM, executeTools, retry, toolApproval } from './systems';
 export {
