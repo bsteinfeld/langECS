@@ -10,7 +10,7 @@ import { defineTool, reactAgent, registerTools, type ToolDef } from '@langecs/st
 export const MODEL_RESOURCE = 'model:main';
 
 /** Small model for the live demo. */
-export const MODEL = 'gpt-4o-mini';
+export const MODEL = 'gpt-5-nano';
 
 export const SYSTEM_PROMPT =
   'You are a helpful assistant. Use the get_weather tool for weather questions and the ' +

@@ -34,7 +34,7 @@ import {
 } from './suite';
 
 /** The real model id, used only on the advisory key-gated path. */
-const REAL_MODEL = 'gpt-4o-mini';
+const REAL_MODEL = 'gpt-5-nano';
 
 /** The render inputs for this demo turn. */
 const VARS: SupportGreetingVars = { user: 'Ada', topic: 'a billing question' };
