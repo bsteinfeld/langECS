@@ -1,0 +1,4 @@
+{"id":"case-1","input":"What is 2+2?","expected":"4","scorer":"scorer:exact-match"}
+{"id":"case-2","input":"List prime numbers under 10","expected":"2, 3, 5, 7","scorer":"scorer:contains"}
+
+{"id":"case-3","input":"Emit an ISO-like date","expected":"{\"source\":\"\\\\d{4}-\\\\d{2}-\\\\d{2}\"}","scorer":"scorer:regex"}

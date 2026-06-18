@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assertSnapshotMatch — golden lock (CI-02) > locks a deterministic sub-world snapshot (writes then matches the fixture) 1`] = `
+{
+  "entities": [
+    {
+      "components": {
+        "eval:CaseTag": true,
+        "eval:EvalInput": "What is 2+3?",
+      },
+      "id": 1,
+    },
+  ],
+  "pendingPairs": [],
+  "version": 1,
+}
+`;
