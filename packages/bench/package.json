@@ -1,0 +1,53 @@
+{
+  "name": "@langecs/bench",
+  "version": "0.1.0",
+  "description": "Benchmarking and metrics components, metering, and cost estimation for LangECS",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/langecs/langecs.git",
+    "directory": "packages/bench"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langecs/core": "workspace:*",
+    "@langecs/eval": "workspace:*",
+    "@langecs/stdlib": "workspace:*"
+  },
+  "peerDependencies": {
+    "@langecs/otel": "workspace:*",
+    "@dqbd/tiktoken": ">=1"
+  },
+  "peerDependenciesMeta": {
+    "@langecs/otel": {
+      "optional": true
+    },
+    "@dqbd/tiktoken": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  }
+}
