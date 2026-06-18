@@ -48,47 +48,48 @@ body{
   display:none;
   flex-direction:column;
   justify-content:center;
-  padding:clamp(28px,5vw,86px);
-  padding-bottom:clamp(40px,6vw,96px);
+  padding:clamp(62px,9.5vh,104px) clamp(40px,6vw,104px) clamp(46px,6vh,78px);
   opacity:0;
 }
-.slide.active{display:flex; animation:slideIn .26s ease-out both}
+.slide.active{display:flex; animation:slideIn .42s cubic-bezier(.22,.61,.36,1) both}
 @keyframes slideIn{from{opacity:0; transform:translateX(14px)} to{opacity:1; transform:none}}
 
 .kicker{
-  font-family:var(--mono); font-size:clamp(11px,1.2vw,13px);
-  letter-spacing:.22em; text-transform:uppercase; color:var(--slate);
-  margin-bottom:clamp(10px,1.6vw,20px);
+  font-family:var(--mono); font-size:clamp(12px,1.3vw,15px);
+  letter-spacing:.22em; text-transform:uppercase; color:var(--cyan); opacity:.85;
+  margin-bottom:clamp(10px,1.6vw,18px);
 }
 h1,h2{font-family:var(--disp); font-weight:700; letter-spacing:-.02em; margin:0; line-height:1.04}
-.h-xl{font-size:clamp(46px,9vw,116px)}
-.h-lg{font-size:clamp(30px,5vw,62px)}
-.h-md{font-size:clamp(24px,3.4vw,42px)}
+.h-xl{font-size:clamp(56px,10vw,150px)}
+.h-lg{font-size:clamp(34px,4.7vw,64px)}
+.h-md{font-size:clamp(27px,3.5vw,48px)}
 .accent{color:var(--cyan)}
-.tagline{font-size:clamp(17px,2.2vw,26px); color:#c4ccdc; max-width:18em; line-height:1.45; margin-top:18px}
-.body{font-size:clamp(15px,1.7vw,21px); color:#c4ccdc; line-height:1.6; max-width:30em; margin-top:18px}
+.tagline{font-size:clamp(19px,2.3vw,29px); color:#c4ccdc; max-width:19em; line-height:1.42; margin-top:22px}
+.body{font-size:clamp(17px,1.85vw,24px); color:#c4ccdc; line-height:1.55; max-width:29em; margin-top:18px}
 .body p{margin:.5em 0}
-.body .ln{margin:.34em 0}
+.body .ln{margin:.5em 0}
 strong{color:var(--text); font-weight:600}
 em{color:var(--amber); font-style:normal}
 code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   background:rgba(52,224,224,.08); border:1px solid rgba(52,224,224,.18);
   border-radius:6px; padding:.06em .42em}
 
-.stage{display:flex; gap:clamp(20px,4vw,64px); align-items:center; margin-top:6px; min-height:0; flex:1}
+.stage{display:flex; gap:clamp(24px,4.5vw,72px); align-items:center; margin-top:14px; min-height:0; flex:0 1 auto}
 .stage.two{flex-direction:row}
-.stage.center{flex:0 1 auto; flex-direction:column; align-items:center; text-align:center; justify-content:center; gap:4px}
-.stage.center .body{max-width:34em; text-align:center}
+.stage.two .scene{max-height:74vh}
+.stage.center{flex:0 1 auto; flex-direction:column; align-items:center; text-align:center; justify-content:center; gap:8px}
+.stage.center .body{max-width:36em; text-align:center}
 .stage.center .visual{width:100%}
-.stage.center .scene{max-width:880px; max-height:44vh}
+.stage.center .scene{max-width:1040px; max-height:50vh}
 .copy{flex:0 0 42%; min-width:0}
-.stage.wide-copy .copy{flex:0 0 50%}
+.stage.wide-copy .copy{flex:0 0 48%}
 .visual{flex:1 1 0; min-width:0; display:flex; align-items:center; justify-content:center}
-.scene{width:100%; height:auto; max-height:62vh; overflow:visible}
+.scene{width:100%; height:auto; max-height:66vh; overflow:visible}
 
 /* SVG primitives */
 .scene text{font-family:var(--mono); fill:var(--text)}
-.ent{fill:rgba(110,124,150,.06); stroke:var(--slate); stroke-width:2}
+.ent{fill:rgba(110,124,150,.06); stroke:var(--slate); stroke-width:2; transition:stroke .45s ease, filter .45s ease}
+.ent.lit{stroke:var(--cyan); filter:drop-shadow(0 0 13px rgba(52,224,224,.5))}
 .ent-lbl{fill:#9aa6bd; font-size:15px; text-anchor:middle}
 .note{fill:var(--slate); font-size:13px}
 .cap{fill:var(--cyan); font-size:14px; opacity:0; transition:opacity .4s}
@@ -121,6 +122,9 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
 .sys.vetoed .sname{fill:#9aa6bd}
 
 .trace{fill:none; stroke:var(--slate); stroke-width:2; stroke-linecap:round; opacity:.55}
+.trace.rail{opacity:.28; stroke-width:2}
+.cometpath{fill:none; stroke:transparent; stroke-width:4; stroke-linecap:round}
+.cometpath.live{stroke:var(--cyan); filter:drop-shadow(0 0 8px rgba(52,224,224,.95))}
 .trace.live{stroke:var(--cyan); opacity:1; filter:drop-shadow(0 0 5px rgba(52,224,224,.8))}
 .trace.dead{stroke:var(--slate)!important; opacity:.4!important; filter:none!important}
 .xmark{opacity:0; transition:opacity .3s}
@@ -141,32 +145,37 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   border-radius:999px; padding:5px 13px; background:rgba(110,124,150,.06)}
 
 /* mapping table */
-.rosetta{width:100%; border-collapse:collapse; margin-top:10px; font-size:clamp(14px,1.6vw,19px)}
-.rosetta td{padding:11px 10px; border-bottom:1px solid var(--grid)}
+.rosetta{width:100%; border-collapse:collapse; margin-top:10px; font-size:clamp(17px,1.95vw,25px)}
+.rosetta td{padding:clamp(12px,1.5vw,20px) 10px; border-bottom:1px solid var(--grid)}
 .rosetta .k{font-family:var(--mono); color:var(--cyan); white-space:nowrap}
 .rosetta .arrow{color:var(--slate); text-align:center; width:2em}
 .rosetta .v{color:#aeb8cd}
-.footnote{margin-top:18px; font-family:var(--mono); font-size:13px; line-height:1.6;
-  color:#bfe9e9; border-left:2px solid var(--cyan); padding:10px 14px;
+.footnote{margin-top:22px; font-family:var(--mono); font-size:clamp(14px,1.5vw,17px); line-height:1.6;
+  color:#bfe9e9; border-left:2px solid var(--cyan); padding:14px 18px;
   background:rgba(52,224,224,.05); border-radius:0 8px 8px 0}
 
 /* feature cards */
-.grid6{display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(12px,1.6vw,20px); width:100%}
-.fcard{border:1px solid var(--chip-outline); border-radius:14px; padding:clamp(14px,1.8vw,22px);
-  background:linear-gradient(180deg, rgba(15,23,48,.7), rgba(11,16,32,.4)); min-height:120px}
-.fcard .fnum{font-family:var(--mono); font-size:12px; color:var(--slate)}
-.fcard .fh{font-family:var(--disp); font-weight:600; font-size:clamp(16px,1.9vw,22px); margin:8px 0 6px}
-.fcard .fd{font-size:clamp(12px,1.3vw,14px); color:#9aa6bd; line-height:1.5}
+.grid6{display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(16px,1.9vw,26px); width:100%}
+.fcard{border:1px solid var(--chip-outline); border-radius:18px; padding:clamp(20px,2.3vw,32px);
+  background:linear-gradient(165deg, rgba(22,32,60,.75), rgba(12,17,33,.35));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04); display:flex; flex-direction:column; justify-content:center;
+  min-height:clamp(152px,19vh,196px); transition:border-color .3s, transform .3s}
+.fcard.revealed{border-color:rgba(80,98,140,.55)}
+.fcard .fnum{font-family:var(--mono); font-size:14px; color:var(--slate)}
+.fcard .fh{font-family:var(--disp); font-weight:600; font-size:clamp(21px,2.3vw,30px); margin:10px 0 8px}
+.fcard .fd{font-size:clamp(14px,1.5vw,19px); color:#9aa6bd; line-height:1.5}
 .fcard .glyph{height:30px; margin-bottom:4px}
 .fcard.c-cyan .fh{color:var(--cyan)} .fcard.c-amber .fh{color:var(--amber)} .fcard.c-coral .fh{color:var(--coral)}
 
 /* mini cards (save/fork) */
-.grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:clamp(12px,1.6vw,18px); width:100%}
-.mcard{border:1px solid var(--chip-outline); border-radius:14px; padding:16px;
-  background:rgba(15,23,48,.55)}
-.mcard h3{font-family:var(--disp); font-size:clamp(15px,1.7vw,19px); margin:0 0 8px; color:var(--text)}
-.mcard p{font-size:clamp(12px,1.3vw,14px); color:#9aa6bd; line-height:1.5; margin:0}
-.mcard .tag{font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase}
+.grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:clamp(14px,1.8vw,22px); width:100%; align-items:stretch}
+.mcard{border:1px solid var(--chip-outline); border-radius:18px; padding:clamp(20px,2.2vw,30px);
+  background:linear-gradient(165deg, rgba(22,32,60,.65), rgba(12,17,33,.35));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04); display:flex; flex-direction:column; justify-content:center;
+  min-height:clamp(180px,24vh,236px)}
+.mcard h3{font-family:var(--disp); font-size:clamp(19px,2.1vw,26px); margin:10px 0 10px; color:var(--text)}
+.mcard p{font-size:clamp(14px,1.5vw,19px); color:#9aa6bd; line-height:1.5; margin:0}
+.mcard .tag{font-family:var(--mono); font-size:13px; letter-spacing:.12em; text-transform:uppercase}
 .mcard.t-cyan .tag{color:var(--cyan)} .mcard.t-amber .tag{color:var(--amber)} .mcard.t-coral .tag{color:var(--coral)}
 
 /* devtools GUI mock */
@@ -177,20 +186,24 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   background:#0a1124; border-bottom:1px solid var(--grid)}
 .gui-chrome .dot{width:11px;height:11px;border-radius:50%}
 .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
-.gui-chrome .url{font-family:var(--mono); font-size:12px; color:var(--slate); margin-left:10px}
+.gui-chrome .url{font-family:var(--mono); font-size:14px; color:var(--slate); margin-left:10px}
 .gui-body{display:grid; grid-template-columns:1.05fr 1.25fr .9fr; gap:1px; background:var(--grid)}
-.panel{background:var(--panel); padding:14px; min-height:230px}
-.gui.compact .panel{min-height:158px}
-.panel h4{font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
-  color:var(--slate); margin:0 0 10px; font-weight:600}
-.bubble{font-size:13px; line-height:1.4; border-radius:10px; padding:8px 11px; margin-bottom:8px; max-width:90%}
+.panel{background:var(--panel); padding:18px; min-height:250px}
+.gui.compact .panel{min-height:240px}
+.panel h4{font-family:var(--mono); font-size:13px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--slate); margin:0 0 12px; font-weight:600}
+.panel .body{font-size:15px; line-height:1.5; margin-top:8px; max-width:none}
+.panel .mini{margin-top:14px; padding-top:14px; border-top:1px solid var(--grid);
+  font-family:var(--mono); font-size:13.5px; color:#9aa6bd; line-height:1.8}
+.panel .mini .ok{color:var(--cyan)} .panel .mini .err{color:var(--coral)} .panel .mini .am{color:var(--amber)}
+.bubble{font-size:15px; line-height:1.45; border-radius:10px; padding:10px 13px; margin-bottom:10px; max-width:92%}
 .bubble.user{background:rgba(110,124,150,.14); color:#dbe2f0; margin-left:auto}
-.bubble.tool{font-family:var(--mono); font-size:12px; background:rgba(52,224,224,.07);
+.bubble.tool{font-family:var(--mono); font-size:13.5px; background:rgba(52,224,224,.07);
   border:1px solid rgba(52,224,224,.18); color:#bfe9e9}
 .bubble.bot{background:rgba(15,23,48,.9); border:1px solid var(--grid); color:#c4ccdc}
-.lock{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:11px; color:var(--amber)}
-.badge{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
-  padding:6px 11px; border-radius:999px; border:1px solid var(--amber); color:var(--amber);
+.lock{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:13px; color:var(--amber)}
+.badge{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:14px;
+  padding:8px 13px; border-radius:999px; border:1px solid var(--amber); color:var(--amber);
   background:rgba(255,179,71,.1)}
 .badge .blip{width:8px;height:8px;border-radius:50%;background:var(--amber);
   box-shadow:0 0 0 0 rgba(255,179,71,.6); animation:pulse 1.6s infinite}
@@ -199,14 +212,47 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   background:#0a1124; border:1px solid var(--cyan); border-radius:8px; padding:6px 10px;
   box-shadow:0 8px 24px rgba(0,0,0,.5); max-width:230px; line-height:1.4}
 .callout b{color:var(--cyan)}
-.gui-wrap{position:relative; width:100%; display:flex; justify-content:center}
+.gui-wrap{position:relative; width:100%; display:flex; justify-content:center; align-items:center; margin-top:16px}
+.gui{flex:0 0 auto}
 
 /* checklist */
-.checklist{display:grid; grid-template-columns:repeat(3,auto); gap:8px 26px; margin-top:22px;
-  font-family:var(--mono); font-size:14px; color:#9aa6bd; justify-content:center}
+.checklist{display:grid; grid-template-columns:repeat(3,auto); gap:10px 30px; margin-top:26px;
+  font-family:var(--mono); font-size:clamp(14px,1.6vw,18px); color:#9aa6bd; justify-content:center}
 .checklist span::before{content:"✓ "; color:var(--cyan)}
-.cta{font-family:var(--mono); font-size:clamp(14px,1.7vw,18px); color:#bfe9e9; margin-top:8px}
+.cta{font-family:var(--mono); font-size:clamp(16px,1.9vw,23px); color:#bfe9e9; margin-top:10px}
 .cta .muted{color:var(--slate)}
+
+/* two-column compare (when-not slide) */
+.compare{display:grid; grid-template-columns:1fr 1fr; gap:clamp(18px,2.4vw,34px); width:100%; margin-top:14px}
+.col{border:1px solid var(--chip-outline); border-radius:20px; padding:clamp(24px,2.7vw,38px); display:flex; flex-direction:column;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.col.graph{border-color:rgba(255,179,71,.4); background:linear-gradient(180deg, rgba(255,179,71,.06), transparent)}
+.col.world{border-color:rgba(52,224,224,.4); background:linear-gradient(180deg, rgba(52,224,224,.06), transparent)}
+.col .ch{font-family:var(--disp); font-weight:700; font-size:clamp(22px,2.5vw,34px); margin:0 0 4px}
+.col.graph .ch{color:var(--amber)} .col.world .ch{color:var(--cyan)}
+.col .csub{font-family:var(--mono); font-size:clamp(13px,1.4vw,16px); color:var(--slate); margin-bottom:14px}
+.col ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:clamp(10px,1.4vw,16px)}
+.col li{font-size:clamp(15px,1.65vw,21px); color:#c4ccdc; line-height:1.4; padding-left:26px; position:relative}
+.col.graph li::before{content:"▸"; position:absolute; left:0; color:var(--amber)}
+.col.world li::before{content:"▸"; position:absolute; left:0; color:var(--cyan)}
+
+/* moat / sell slide */
+.wins{display:flex; flex-direction:column; gap:clamp(16px,2vw,28px)}
+.win{font-size:clamp(15px,1.7vw,22px); line-height:1.5; color:#aeb8cd; padding-left:20px; position:relative}
+.win::before{content:"▸"; position:absolute; left:0; color:var(--cyan)}
+.win .wk{font-family:var(--disp); font-weight:700; color:var(--cyan); margin-right:7px}
+.win .wd{color:#c4ccdc}
+.punch{margin-top:8px; font-size:clamp(18px,2vw,27px); line-height:1.5; color:#dbe2f0; border-left:3px solid var(--cyan); padding:clamp(14px,1.8vw,22px) clamp(16px,2vw,26px); background:rgba(52,224,224,.05); border-radius:0 12px 12px 0}
+.punch .hl{color:var(--cyan); font-weight:600}
+.punch .lo{color:var(--amber)}
+
+/* agenda */
+.agenda{display:flex; flex-direction:column; gap:clamp(10px,1.4vw,16px); width:100%; max-width:880px; margin:14px auto 0; flex:0 1 auto}
+.astep{display:flex; gap:22px; align-items:center; text-align:left; padding:clamp(11px,1.4vw,17px) clamp(16px,1.9vw,24px);
+  border:1px solid var(--chip-outline); border-radius:14px; background:rgba(15,23,48,.5)}
+.astep .anum{font-family:var(--disp); font-weight:700; font-size:clamp(22px,2.6vw,38px); color:var(--cyan); line-height:1; flex:0 0 auto; width:1.2em; text-align:center}
+.astep .at{font-family:var(--disp); font-weight:600; font-size:clamp(18px,2vw,26px); color:var(--text)}
+.astep .ad{font-size:clamp(13px,1.4vw,18px); color:#9aa6bd; margin-top:3px}
 
 /* tangle / graph svg specifics */
 .tangle{stroke:var(--slate); stroke-width:2; fill:none; opacity:.6}
@@ -220,6 +266,18 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
 .qmark{fill:var(--coral); font-size:15px; font-family:var(--mono)}
 
 /* fixed UI */
+#stepper{position:fixed; top:0; left:0; right:0; z-index:30; display:flex; justify-content:center;
+  gap:clamp(14px,2.4vw,38px); padding:16px 20px 10px; font-family:var(--mono);
+  font-size:clamp(11px,1.15vw,14px); letter-spacing:.04em; pointer-events:none;
+  background:linear-gradient(180deg, rgba(11,16,32,.92), transparent)}
+#stepper.hide{opacity:0}
+#stepper .sp{display:flex; align-items:center; gap:9px; color:var(--slate); transition:color .3s}
+#stepper .sp .spn{display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+  border-radius:50%; border:1px solid currentColor; font-size:11px}
+#stepper .sp.on{color:var(--cyan)}
+#stepper .sp.on .spn{background:rgba(52,224,224,.14); box-shadow:0 0 12px rgba(52,224,224,.35)}
+#stepper .sp.done{color:#7c8aa6}
+@media (max-width:760px){ #stepper .slabel{display:none} }
 #progress{position:fixed; left:0; bottom:0; height:3px; width:0; background:var(--cyan);
   box-shadow:0 0 10px var(--cyan); z-index:30; transition:width .3s ease}
 #counter{position:fixed; right:18px; bottom:14px; z-index:30; font-family:var(--mono);
@@ -261,37 +319,55 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
 <div class="deck" id="deck">
 
   <!-- 0 — TITLE -->
-  <section class="slide" data-steps="0" aria-label="Title"
+  <section class="slide" data-steps="0" data-scene="title" aria-label="Title"
     data-note="A 30-year-old idea from video games that might fix how we build agents. No edges, no router — just a living world of data.">
     <div class="stage center">
       <div class="kicker">a lightning talk</div>
       <h1 class="h-xl">Lang<span class="accent">ECS</span></h1>
       <p class="tagline">LangGraph.js — but the runtime is a <strong>living ECS world</strong>, not a compiled graph.</p>
-      <div class="visual" style="margin-top:18px">
-        <svg class="scene" viewBox="0 0 760 200" id="sc0" aria-hidden="true">
-          <path id="s0-tr" class="trace" d="M250 70 C 360 50, 430 60, 540 90"/>
-          <circle class="ent" cx="150" cy="110" r="26"/><text class="ent-lbl" x="150" y="115">#1</text>
-          <circle class="ent" cx="300" cy="110" r="26"/><text class="ent-lbl" x="300" y="115">#2</text>
-          <circle class="ent" cx="450" cy="110" r="26"/><text class="ent-lbl" x="450" y="115">#3</text>
-          <g class="chip" id="s0-c1"><rect x="116" y="44" width="68" height="26" rx="7"/><text x="150" y="58">Health</text></g>
-          <g class="chip" id="s0-c2"><rect x="266" y="44" width="68" height="26" rx="7"/><text x="300" y="58">Sprite</text></g>
-          <g class="chip" id="s0-c3"><rect x="416" y="44" width="68" height="26" rx="7"/><text x="450" y="58">State</text></g>
-          <g class="sys" id="s0-sys"><rect x="540" y="80" width="120" height="56" rx="10"/>
-            <text class="sname" x="600" y="104">system</text><text class="squery" x="600" y="123">⟨State⟩</text></g>
-          <text class="quiescent" x="380" y="180">QUIESCENT</text>
+      <div class="visual" style="margin-top:26px">
+        <svg class="scene" viewBox="0 0 760 220" id="sc0" aria-hidden="true">
+          <path class="trace rail" d="M184 150 C 252 106, 308 106, 346 150"/>
+          <path class="trace rail" d="M414 150 C 482 106, 538 106, 576 150"/>
+          <path class="cometpath" id="t0-p1" d="M184 150 C 252 106, 308 106, 346 150"/>
+          <path class="cometpath" id="t0-p2" d="M414 150 C 482 106, 538 106, 576 150"/>
+          <circle class="ent" id="t0-e1" cx="150" cy="150" r="30"/><text class="ent-lbl" x="150" y="155">#1</text>
+          <circle class="ent" id="t0-e2" cx="380" cy="150" r="30"/><text class="ent-lbl" x="380" y="155">#2</text>
+          <circle class="ent" id="t0-e3" cx="610" cy="150" r="30"/><text class="ent-lbl" x="610" y="155">#3</text>
+          <g class="chip" id="t0-c1a"><rect x="96" y="42" width="108" height="26"/><text x="150" y="55">Messages</text></g>
+          <g class="chip" id="t0-c1b"><rect x="112" y="74" width="76" height="24"/><text x="150" y="86">Model</text></g>
+          <g class="chip" id="t0-c2a"><rect x="336" y="42" width="88" height="26"/><text x="380" y="55">Inbox</text></g>
+          <g class="chip" id="t0-c2b"><rect x="346" y="74" width="68" height="24"/><text x="380" y="86">Task</text></g>
+          <g class="chip" id="t0-c3a"><rect x="566" y="42" width="88" height="26"/><text x="610" y="55">Tools</text></g>
+          <g class="chip" id="t0-c3b"><rect x="570" y="74" width="80" height="24"/><text x="610" y="86">State</text></g>
         </svg>
       </div>
       <p class="cta" style="margin-top:6px"><span class="muted">Pregel over an open world.</span></p>
     </div>
   </section>
 
+  <!-- AGENDA -->
+  <section class="slide" data-steps="4" aria-label="The plan"
+    data-note="Four beats: what ECS is, why it maps onto agents, what that buys you (and when it doesn't), then the live demo.">
+    <div class="stage center">
+      <div class="kicker">the plan — four quick beats</div>
+      <h2 class="h-md" style="margin-bottom:6px">A 30-year-old game-engine idea,<br/>pointed at <span class="accent">agents</span></h2>
+      <div class="agenda">
+        <div class="astep" data-step="1"><div class="anum">1</div><div><div class="at">What is ECS?</div><div class="ad">the pattern every modern game engine is built on</div></div></div>
+        <div class="astep" data-step="2"><div class="anum">2</div><div><div class="at">ECS for agents</div><div class="ad">the leap — and the one twist that makes it work</div></div></div>
+        <div class="astep" data-step="3"><div class="anum">3</div><div><div class="at">Why it's good — and when it's <em>not</em></div><div class="ad">the honest pitch</div></div></div>
+        <div class="astep" data-step="4"><div class="anum">4</div><div><div class="at">See it live</div><div class="ad">a refund, a human-approval interrupt, a self-heal</div></div></div>
+      </div>
+    </div>
+  </section>
+
   <!-- 1 — GAME TANGLE -->
-  <section class="slide" data-steps="0" aria-label="The class-tree problem"
+  <section class="slide" data-steps="0" data-part="1" aria-label="The class-tree problem"
     data-note="Old problem; the naive answer is a deep class hierarchy — rigid, and every new combo fights the tree. Games gave up on this.">
     <div class="kicker">first, a detour into games</div>
     <div class="stage two wide-copy">
       <div class="copy">
-        <h2 class="h-lg">A thousand things on screen — without a class tree from hell</h2>
+        <h2 class="h-lg">A thousand things on screen — no class&#8209;tree from hell</h2>
         <div class="body">
           <p class="ln">Ships, asteroids, bullets, the player — all moving and colliding.</p>
           <p class="ln">Naive answer: <code>FlyingEnemyThatShoots extends Enemy extends GameObject</code>…</p>
@@ -333,7 +409,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 2 — ECS THREE NOUNS -->
-  <section class="slide" data-steps="3" aria-label="What ECS is"
+  <section class="slide" data-steps="3" data-part="1" aria-label="What ECS is"
     data-note="Three nouns. No behavior in the data, no data in the id. All logic lives in systems that run over a query.">
     <div class="kicker">the cure games chose: ECS</div>
     <div class="stage two">
@@ -373,7 +449,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 3 — COMPOSITION / HOMING -->
-  <section class="slide" data-steps="0" aria-label="Composition in action"
+  <section class="slide" data-steps="0" data-part="1" data-scene="composition" aria-label="Composition in action"
     data-note="The whole magic: behavior is additive. No subclassing. Hold that thought — it repeats in agent-land.">
     <div class="kicker">composition in action</div>
     <div class="stage two wide-copy">
@@ -414,7 +490,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 4 — SAME DISEASE (LangGraph) -->
-  <section class="slide" data-steps="0" aria-label="Agents have the same disease"
+  <section class="slide" data-steps="0" data-part="2" aria-label="Agents have the same disease"
     data-note="Rigid wiring — the same disease as the class tree. So… what if we steal the cure?">
     <div class="kicker">meanwhile, in agent-land…</div>
     <div class="stage two wide-copy">
@@ -453,30 +529,22 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 5 — THE LEAP / MAPPING -->
-  <section class="slide" data-steps="5" aria-label="The mapping: ECS for agents"
+  <section class="slide" data-steps="5" data-part="2" aria-label="The mapping: ECS for agents"
     data-note="Same three nouns, new domain. Because state is just data, a snapshot is plain JSON — remember that, it pays off in the demo.">
     <div class="kicker">the leap — the “ohhh”</div>
-    <div class="stage two">
-      <div class="copy">
-        <h2 class="h-md">An agent is just a <span class="accent">thing</span> with state &amp; logic</h2>
-        <div class="footnote" data-step="5">components hold <b>only JSON</b>. behavior — models, tools, DB —
-          registers as a <b>named resource</b>: <code>ModelRef("model:main")</code>.
-          that one rule is why a snapshot is plain JSON any process can resume.</div>
-      </div>
-      <div class="visual">
-        <table class="rosetta">
-          <tr data-step="1"><td class="k">Entity</td><td class="arrow">→</td><td class="v">an agent · task · shared blackboard (just an id)</td></tr>
-          <tr data-step="2"><td class="k">Component</td><td class="arrow">→</td><td class="v"><strong>all</strong> state: Messages · ModelRef · PendingToolCalls · errors · interrupts</td></tr>
-          <tr data-step="3"><td class="k">System</td><td class="arrow">→</td><td class="v">callLLM · executeTools · supervisor · healer</td></tr>
-          <tr data-step="4"><td class="k">add / remove a component</td><td class="arrow">→</td><td class="v">what <em>triggers</em> systems (this replaces edges &amp; routers)</td></tr>
-          <tr data-step="4"><td class="k">World</td><td class="arrow">→</td><td class="v">entities + systems + resources + scheduler + snapshot</td></tr>
-        </table>
-      </div>
-    </div>
+    <h2 class="h-md" style="margin-bottom:10px">An agent is just a <span class="accent">thing</span> with state &amp; logic</h2>
+    <table class="rosetta">
+      <tr data-step="1"><td class="k">Entity</td><td class="arrow">→</td><td class="v">an agent, a task, a shared blackboard — just an id</td></tr>
+      <tr data-step="2"><td class="k">Component</td><td class="arrow">→</td><td class="v"><strong>all</strong> state — Messages, ModelRef, PendingToolCalls, errors, interrupts</td></tr>
+      <tr data-step="3"><td class="k">System</td><td class="arrow">→</td><td class="v">callLLM · executeTools · supervisor · healer</td></tr>
+      <tr data-step="4"><td class="k">add / remove a component</td><td class="arrow">→</td><td class="v">what <em>triggers</em> systems — replaces edges &amp; routers</td></tr>
+      <tr data-step="5"><td class="k">World</td><td class="arrow">→</td><td class="v">entities + systems + resources + scheduler + snapshot</td></tr>
+    </table>
+    <div class="footnote" data-step="5">components hold <b>only JSON</b>; behavior — models, tools, DB — registers as a <b>named resource</b>: <code>ModelRef("model:main")</code>. that one rule is why a snapshot is plain JSON any process can resume.</div>
   </section>
 
   <!-- 6 — THE TWIST -->
-  <section class="slide" data-steps="0" aria-label="The reactive twist"
+  <section class="slide" data-steps="0" data-part="2" data-scene="twist" aria-label="The reactive twist"
     data-note="The heart of it: foreign dirt wakes systems; your own writes don't; silence means done. No router anywhere.">
     <div class="kicker">the twist — vs games AND vs LangGraph</div>
     <div class="stage center">
@@ -504,7 +572,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 7 — SIX FEATURES -->
-  <section class="slide" data-steps="6" aria-label="Six things you get for free"
+  <section class="slide" data-steps="6" data-part="3" aria-label="Six things you get for free"
     data-note="These aren't bolted-on features — they all fall out of one rule: there is no execution state outside components.">
     <div class="kicker">because state is data, not code…</div>
     <h2 class="h-md" style="margin-bottom:18px">Six things you get for <span class="accent">free</span></h2>
@@ -519,7 +587,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 8 — REACT LOOP -->
-  <section class="slide" data-steps="0" aria-label="The ReAct loop has zero edges"
+  <section class="slide" data-steps="0" data-part="3" data-scene="react" aria-label="The ReAct loop has zero edges"
     data-note="The classic agent loop — and there's not a single edge in the diagram. The data does the routing.">
     <div class="kicker">feature, in motion</div>
     <div class="stage two wide-copy">
@@ -552,7 +620,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 9 — ERRORS / HEAL -->
-  <section class="slide" data-steps="0" aria-label="Errors are components"
+  <section class="slide" data-steps="0" data-part="3" data-scene="errors" aria-label="Errors are components"
     data-note="No try/catch spaghetti. Failure is data another system can query and fix — you'll see this exact heal in the Timeline.">
     <div class="kicker">feature, in motion</div>
     <div class="stage two wide-copy">
@@ -583,7 +651,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 10 — SAVE / FORK / PAUSE / MERGE -->
-  <section class="slide" data-steps="4" aria-label="Save, fork, pause, merge"
+  <section class="slide" data-steps="4" data-part="3" aria-label="Save, fork, pause, merge"
     data-note="Pause survives process death by construction. Time travel is a primitive. Parallelism is deterministic — conflicts throw, never silently lose data.">
     <div class="kicker">and because state is plain JSON…</div>
     <h2 class="h-md" style="margin-bottom:18px">Save · Fork · Pause · Merge</h2>
@@ -604,8 +672,60 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
     <p class="cta" data-step="4" style="margin-top:20px"><span class="muted">flight recorder — every step logs scheduled pairs, when-vetoes, writes, timings.</span></p>
   </section>
 
+  <!-- WHAT'S GENUINELY NEW -->
+  <section class="slide" data-part="3" aria-label="What a graph framework can't copy"
+    data-note="The honest finding from porting six LangGraph examples: every LangECS win is a runtime/architectural property; every loss is read-time legibility or ecosystem age — and those are tooling-fixable. You can't bolt 'three agents thinking in one step' onto a compiled graph.">
+    <div class="kicker">the part that actually matters</div>
+    <h2 class="h-md">What a graph framework <span class="accent">can't copy</span></h2>
+    <div class="stage two">
+      <div class="copy" style="flex:0 0 52%">
+        <div class="wins">
+          <div class="win"><span class="wk">Agents are data, not structure.</span> <span class="wd">N agents = N entities on one set of systems. Spawn a teammate mid-run — no graph to recompile.</span></div>
+          <div class="win"><span class="wk">Query the whole world.</span> <span class="wd">One query powers a budget guard, a router, or a trace logger across every agent at once.</span></div>
+          <div class="win"><span class="wk">Failure is queryable state.</span> <span class="wd">A supervisor heals a worker by reading its <code>SystemError</code> — no exception unwinds your run.</span></div>
+          <div class="win"><span class="wk">Survives process death.</span> <span class="wd">Pause is a JSON file you can <code>cat</code>; resume in a brand-new process.</span></div>
+          <div class="win"><span class="wk">Three agents in one step.</span> <span class="wd">A deterministic parallel super-step; reducers merge the fan-in.</span></div>
+        </div>
+      </div>
+      <div class="visual">
+        <div class="punch">Every win here is a <span class="hl">run-time</span> property.<br/>The trade-offs are <span class="lo">read-time</span> legibility &amp; ecosystem age — and those are <em>tooling-fixable</em>.<br/><br/><strong>You can't retrofit “three agents thinking in one step” onto a compiled graph.</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHEN NOT TO USE -->
+  <section class="slide" data-part="3" aria-label="Graph or world"
+    data-note="Be honest: a drawn graph you can read cold, a mature ecosystem, a hosted platform, durable DB checkpointers, and arbitrary mid-node pause are LangGraph's today. Only trade read-time legibility for run-time power when the power actually pays off.">
+    <div class="kicker">be honest — it isn't always the answer</div>
+    <h2 class="h-md">Graph, or <span class="accent">world</span>?</h2>
+    <div class="compare">
+      <div class="col graph">
+        <div class="ch">Reach for a graph</div>
+        <div class="csub">LangGraph, today</div>
+        <ul>
+          <li>You want to <b>read the flow cold</b> — a drawn topology beats implicit firing</li>
+          <li>A <b>simple, linear pipeline</b> — few steps, fixed order</li>
+          <li>You need a <b>mature ecosystem</b> &amp; hosted platform — Studio, managed persistence</li>
+          <li><b>Durable Postgres / Redis</b> checkpointers <em>now</em> (LangECS's are roadmap)</li>
+          <li><b>Pause mid-node</b> at an arbitrary line · polished token-streaming UX</li>
+        </ul>
+      </div>
+      <div class="col world">
+        <div class="ch">Reach for a world</div>
+        <div class="csub">LangECS</div>
+        <ul>
+          <li><b>Many agents</b> — spawned, supervised &amp; healed at runtime</li>
+          <li><b>Failure as state</b> you can query, retry, and heal</li>
+          <li><b>Kill &amp; resume</b> across processes, by construction</li>
+          <li><b>Parallel agents</b> in one deterministic step</li>
+          <li><b>Step-level tests</b> + a flight recorder, zero network</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
   <!-- 11 — DEMO: REFUND -->
-  <section class="slide" data-steps="0" aria-label="Demo: the support desk"
+  <section class="slide" data-steps="0" data-part="4" data-scene="refund" aria-label="Demo: the support desk"
     data-note="Everything you just heard, on one screen. Watch it find order 1042, then stop dead waiting for a human — nothing lost.">
     <div class="kicker">now watch it — live, in devtools</div>
     <h2 class="h-md" style="margin-bottom:14px">The Support Desk: refund order <span class="accent">#1042</span></h2>
@@ -650,7 +770,7 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   </section>
 
   <!-- 12 — DEMO: POKE -->
-  <section class="slide" data-steps="5" aria-label="Demo: poke the living world"
+  <section class="slide" data-steps="5" data-part="4" aria-label="Demo: poke the living world"
     data-note="Every abstract feature is now visible and pokeable. I'll approve the refund, show the worker heal, and a time-travel fork. That's the payoff.">
     <div class="kicker">poke the living world</div>
     <h2 class="h-md" style="margin-bottom:14px">Approve it. Heal it. Edit it. Rewind it.</h2>
@@ -661,23 +781,27 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
           <span class="url">localhost:4173 · LangECS DevTools</span></div>
         <div class="gui-body" style="grid-template-columns:repeat(5,1fr)">
           <div class="panel" data-step="1"><h4>① Interrupts</h4>
-            <div class="bubble bot" style="font-size:12px; font-family:var(--mono)">Approve <span style="color:var(--cyan)">▸</span></div>
-            <p class="body" style="font-size:12px; margin-top:8px"><code>{approved:true}</code> resumes → refund <strong>done</strong>. Or deny with a reason.</p></div>
+            <p class="body"><code>{approved:true}</code> resumes → refund <strong>done</strong>. Or deny with a reason.</p>
+            <div class="mini">status: <span class="am">pending</span> → <span class="ok">done</span></div></div>
           <div class="panel" data-step="2"><h4>② Timeline</h4>
-            <p class="body" style="font-size:12px">A worker job <span style="color:var(--coral)">fails once</span> → <code>SystemError</code> → retry → <span style="color:var(--cyan)">auto-clears</span>.</p></div>
+            <p class="body">A worker job <span style="color:var(--coral)">fails once</span> → <code>SystemError</code> → retry.</p>
+            <div class="mini">▪ ▪ <span class="err">✕</span> ▪ → retry → <span class="ok">✓ healed</span></div></div>
           <div class="panel" data-step="3"><h4>③ Inspector</h4>
-            <p class="body" style="font-size:12px">Edit an order's <code>amount</code> in the live OrderBook; ask again — the tool reads your edit.</p></div>
+            <p class="body">Edit an order's <code>amount</code> live; ask again — the tool reads your edit.</p>
+            <div class="mini">amount: <span class="err">42.50</span> → <span class="ok">39.99</span></div></div>
           <div class="panel" data-step="4"><h4>④ Time Travel</h4>
-            <p class="body" style="font-size:12px">Restore the boundary <em>before</em> the refund → replay differently as a <strong>fork</strong>.</p></div>
+            <p class="body">Restore the boundary <em>before</em> the refund → replay as a <strong>fork</strong>.</p>
+            <div class="mini">┌ main<br/>└ <span class="ok">fork ▸</span></div></div>
           <div class="panel" data-step="5"><h4>⑤ Traces</h4>
-            <p class="body" style="font-size:12px">OTel spans: run → steps → systems → chat / tool, with <strong>token counts</strong>.</p></div>
+            <p class="body">OTel spans: run → steps → systems → chat / tool.</p>
+            <div class="mini">run ▸ step ▸ chat&nbsp;&nbsp;<span class="ok">1,240 tok</span></div></div>
         </div>
       </div>
     </div>
   </section>
 
   <!-- 13 — CLOSING -->
-  <section class="slide" data-steps="0" aria-label="Closing"
+  <section class="slide" data-steps="0" data-scene="closing" aria-label="Closing"
     data-note="Games solved the tangle decades ago. We just stole the cure for agents. Let's leave the slides and poke the real thing.">
     <div class="stage center">
       <div class="kicker">steal the fix</div>
@@ -710,8 +834,9 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
 
 </div>
 
+<div id="stepper" class="hide"></div>
 <div id="progress"></div>
-<div id="counter">1 / 14</div>
+<div id="counter">1 / 17</div>
 <div id="hint">→ / space · ? help</div>
 <div id="notes"><span class="lbl">speaker notes</span><span id="notes-text"></span></div>
 <div id="help"><div class="box">
@@ -753,6 +878,24 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   var notes = document.getElementById('notes');
   var notesText = document.getElementById('notes-text');
   var help = document.getElementById('help');
+  var stepper = document.getElementById('stepper');
+
+  /* ---- section stepper: ① What's ECS · ② For agents · ③ Why it's good · ④ See it live ---- */
+  var PARTS = ['What’s ECS', 'ECS for agents', 'Why it’s good', 'See it live'];
+  stepper.innerHTML = PARTS.map(function(p, i){
+    return '<span class="sp" data-p="'+(i+1)+'"><span class="spn">'+(i+1)+'</span><span class="slabel">'+p+'</span></span>';
+  }).join('');
+  var stepEls = [].slice.call(stepper.querySelectorAll('.sp'));
+  function updateStepper(part){
+    if(!part){ stepper.classList.add('hide'); return; }
+    stepper.classList.remove('hide');
+    var pn = parseInt(part, 10);
+    for(var i=0;i<stepEls.length;i++){
+      var pi = parseInt(stepEls[i].dataset.p, 10);
+      stepEls[i].classList.toggle('on', pi === pn);
+      stepEls[i].classList.toggle('done', pi < pn);
+    }
+  }
 
   function applySteps(i){
     var st = stepState[i];
@@ -770,11 +913,11 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
     progress.style.width = ((cur+1)/n*100)+'%';
     counter.textContent = (cur+1)+' / '+n;
     notesText.textContent = slides[cur].dataset.note || '';
+    updateStepper(slides[cur].dataset.part);
     try{ history.replaceState(null,'','#'+(cur+1)); }catch(e){}
     animGen++;
-    var fn = SCENES[cur];
-    if(fn && !reduce) fn(animGen);
-    else if(fn && reduce) fn(animGen); // scenes self-handle reduced motion (set static state)
+    var fn = SCENES[slides[cur].dataset.scene];
+    if(fn) fn(animGen);
   }
   function goTo(i, fromLeft){
     i = Math.max(0, Math.min(n-1, i));
@@ -865,27 +1008,41 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   /* ============ scenes ============ */
   var SCENES = {};
 
-  /* 0 — title */
-  SCENES[0] = function(gen){
-    var root = slides[0]; var ok = guarder(gen, root);
-    var chips=[q('s0-c1'),q('s0-c2'),q('s0-c3')], tr=q('s0-tr'), sys=q('s0-sys');
-    function reset(){ chips.forEach(hide); resetTrace(tr); calm(sys); unquiesce(root); }
-    if(reduce){ reset(); chips.forEach(show); return; }
+  /* 0 — title: an ambient signal flowing across a living world */
+  SCENES.title = function(gen){
+    var root = document.querySelector('.slide[data-scene="title"]'); if(!root) return; var ok = guarder(gen, root);
+    var ents = [q('t0-e1'), q('t0-e2'), q('t0-e3')];
+    var chips = [[q('t0-c1a'),q('t0-c1b')], [q('t0-c2a'),q('t0-c2b')], [q('t0-c3a'),q('t0-c3b')]];
+    var comets = [q('t0-p1'), q('t0-p2')];
+    function comet(p, dur){ if(!p) return; var L=p.getTotalLength(); var seg=44;
+      p.style.transition='none'; p.style.strokeDasharray=seg+' '+L; p.style.strokeDashoffset='0';
+      p.classList.add('live'); p.getBoundingClientRect();
+      p.style.transition='stroke-dashoffset '+dur+'ms linear'; p.style.strokeDashoffset=(-L)+''; }
+    function cometOff(p){ if(!p) return; p.classList.remove('live'); p.style.transition='none'; p.style.strokeDasharray='none'; }
+    function lit(i){ if(ents[i]) ents[i].classList.add('lit'); chips[i].forEach(live); }
+    function dim(i){ if(ents[i]) ents[i].classList.remove('lit'); chips[i].forEach(cool); }
+    function reset(){ ents.forEach(function(e){ e && e.classList.remove('lit'); }); chips.forEach(function(pr){ pr.forEach(hide); }); comets.forEach(cometOff); }
+    if(reduce){ reset(); chips.forEach(function(pr){ pr.forEach(show); }); lit(0); return; }
     (async function loop(){
+      reset(); await sleep(360); if(!ok()) return;
+      for(var i=0;i<3;i++){ chips[i].forEach(show); await sleep(170); if(!ok()) return; }
+      await sleep(360); if(!ok()) return;
       while(ok()){
-        reset(); await sleep(500); if(!ok()) return;
-        for(var i=0;i<chips.length;i++){ live(chips[i]); await sleep(360); if(!ok()) return; chips[i].classList.remove('live'); }
-        await sleep(150); if(!ok()) return;
-        drawTrace(tr, 700); await sleep(720); if(!ok()) return;
-        fire(sys); await sleep(700); if(!ok()) return;
-        quiesce(root); await sleep(2400); if(!ok()) return;
+        lit(0); await sleep(620); if(!ok()) return;
+        comet(comets[0], 820); await sleep(600); if(!ok()) return;
+        lit(1); await sleep(300); if(!ok()) return;
+        dim(0); cometOff(comets[0]); await sleep(360); if(!ok()) return;
+        comet(comets[1], 820); await sleep(600); if(!ok()) return;
+        lit(2); await sleep(300); if(!ok()) return;
+        dim(1); cometOff(comets[1]); await sleep(820); if(!ok()) return;
+        dim(2); await sleep(820); if(!ok()) return;
       }
     })();
   };
 
   /* 3 — composition / homing */
-  SCENES[3] = function(gen){
-    var root = slides[3]; var ok = guarder(gen, root);
+  SCENES.composition = function(gen){
+    var root = document.querySelector('.slide[data-scene="composition"]'); if(!root) return; var ok = guarder(gen, root);
     var base=['s3-p1','s3-p2','s3-p3','s3-a1','s3-a2','s3-b1','s3-b2'].map(q);
     var homing=q('s3-homing'), tr=q('s3-tr'), sys=q('s3-sys'), rock=q('s3-rock'), cap=q('s3-cap');
     function reset(){ base.forEach(hide); hide(homing); resetTrace(tr); calm(sys);
@@ -912,8 +1069,8 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   };
 
   /* 6 — the twist (signature) */
-  SCENES[6] = function(gen){
-    var root = slides[6]; var ok = guarder(gen, root);
+  SCENES.twist = function(gen){
+    var root = document.querySelector('.slide[data-scene="twist"]'); if(!root) return; var ok = guarder(gen, root);
     var msg=q('s6-msg'), user=q('s6-user'), trA=q('s6-trA'), trB=q('s6-trB'), sys=q('s6-sys'), x=q('s6-x'), cap=q('s6-cap');
     function reset(){ hide(msg); hide(user); resetTrace(trA); resetTrace(trB); calm(sys);
       if(x)x.classList.remove('show'); if(cap)cap.classList.remove('show'); unquiesce(root); }
@@ -934,8 +1091,8 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   };
 
   /* 8 — ReAct loop */
-  SCENES[8] = function(gen){
-    var root = slides[8]; var ok = guarder(gen, root);
+  SCENES.react = function(gen){
+    var root = document.querySelector('.slide[data-scene="react"]'); if(!root) return; var ok = guarder(gen, root);
     var llm=q('s8-llm'), tools=q('s8-tools'), ptc=q('s8-ptc'), msg=q('s8-msg');
     var t1=q('s8-t1'), t2=q('s8-t2'), t3=q('s8-t3'), t4=q('s8-t4');
     function reset(){ calm(llm); calm(tools); hide(ptc); hide(msg);
@@ -961,8 +1118,8 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   };
 
   /* 9 — errors / heal */
-  SCENES[9] = function(gen){
-    var root = slides[9]; var ok = guarder(gen, root);
+  SCENES.errors = function(gen){
+    var root = document.querySelector('.slide[data-scene="errors"]'); if(!root) return; var ok = guarder(gen, root);
     var err=q('s9-err'), t1=q('s9-t1'), proc=q('s9-proc'), wr=q('s9-write'), wx=q('s9-writex'), t2=q('s9-t2'), retry=q('s9-retry'), cap=q('s9-cap');
     function reset(){ hide(err); err.classList.remove('dead'); resetTrace(t1); resetTrace(t2);
       calm(proc); calm(retry); hide(wr); if(wx)wx.classList.remove('show'); if(cap)cap.classList.remove('show'); }
@@ -987,8 +1144,8 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   };
 
   /* 11 — demo refund mini-flow */
-  SCENES[11] = function(gen){
-    var root = slides[11]; var ok = guarder(gen, root);
+  SCENES.refund = function(gen){
+    var root = document.querySelector('.slide[data-scene="refund"]'); if(!root) return; var ok = guarder(gen, root);
     var user=q('s11-user'), llm=q('s11-llm'), ptc=q('s11-ptc'), tools=q('s11-tools');
     var t1=q('s11-t1'), t2=q('s11-t2'), t3=q('s11-t3');
     function reset(){ hide(user); hide(ptc); calm(llm); [t1,t2,t3].forEach(resetTrace); }
@@ -1008,8 +1165,8 @@ code{font-family:var(--mono); font-size:.88em; color:#bfe9e9;
   };
 
   /* 13 — closing ripple */
-  SCENES[13] = function(gen){
-    var root = slides[13]; var ok = guarder(gen, root);
+  SCENES.closing = function(gen){
+    var root = document.querySelector('.slide[data-scene="closing"]'); if(!root) return; var ok = guarder(gen, root);
     var spark=q('s13-spark'), t1=q('s13-t1'), t2=q('s13-t2');
     function reset(){ hide(spark); resetTrace(t1); resetTrace(t2); unquiesce(root); }
     if(reduce){ reset(); return; }
