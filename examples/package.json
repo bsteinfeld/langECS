@@ -23,13 +23,17 @@
     "research-team": "tsx research-team/main.ts",
     "devtools-demo": "tsx devtools-demo/main.ts",
     "context-window": "tsx context-window/main.ts",
-    "rag-qa": "tsx rag-qa/main.ts"
+    "rag-qa": "tsx rag-qa/main.ts",
+    "eval-react-agent": "tsx eval-react-agent/main.ts",
+    "eval-llm-judge": "tsx eval-llm-judge/main.ts",
+    "prompt-registry": "tsx prompt-registry/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",
     "@langecs/ai-sdk": "workspace:*",
     "@langecs/core": "workspace:*",
     "@langecs/devtools": "workspace:*",
+    "@langecs/eval": "workspace:*",
     "@langecs/otel": "workspace:*",
     "@langecs/persist-fs": "workspace:*",
     "@langecs/stdlib": "workspace:*",

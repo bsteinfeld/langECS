@@ -1,0 +1,64 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`one characterization case locks its structural shape (CI-02 in the shipped example) 1`] = `
+{
+  "entities": [
+    {
+      "components": {
+        "Messages": [
+          {
+            "content": "What's the weather in San Francisco, and what is (23.5 * 4) - 7?",
+            "role": "user",
+          },
+          {
+            "content": "",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "args": {
+                  "city": "San Francisco",
+                },
+                "id": "call-weather",
+                "name": "get_weather",
+              },
+              {
+                "args": {
+                  "expression": "(23.5 * 4) - 7",
+                },
+                "id": "call-calc",
+                "name": "calculator",
+              },
+            ],
+          },
+          {
+            "content": "{"city":"San Francisco","tempF":64,"conditions":"foggy","source":"stubbed demo data"}",
+            "name": "get_weather",
+            "role": "tool",
+            "toolCallId": "call-weather",
+          },
+          {
+            "content": "87",
+            "name": "calculator",
+            "role": "tool",
+            "toolCallId": "call-calc",
+          },
+          {
+            "content": "It is 64°F and foggy in San Francisco; (23.5 * 4) - 7 = 87.",
+            "role": "assistant",
+          },
+        ],
+        "ModelRef": "model:main",
+        "SystemPrompt": "You are a helpful assistant. Use the get_weather tool for weather questions and the calculator tool for any arithmetic — never compute math yourself. Answer concisely.",
+        "Tools": [
+          "get_weather",
+          "calculator",
+        ],
+        "agent:assistant": true,
+      },
+      "id": 1,
+    },
+  ],
+  "pendingPairs": [],
+  "version": 1,
+}
+`;
