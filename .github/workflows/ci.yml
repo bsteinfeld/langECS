@@ -30,6 +30,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: R1 zero-dep guard (core)
+        run: pnpm depcheck:core
+
+      - name: LLM-judge gate (no unconditional calls)
+        run: pnpm judge:gate
+
+      - name: Prompt @latest gate (no mutable PromptRef in committed tests/examples)
+        run: pnpm prompts:gate
+
       - name: Build
         run: pnpm build
 
