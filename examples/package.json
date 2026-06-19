@@ -26,7 +26,8 @@
     "rag-qa": "tsx rag-qa/main.ts",
     "eval-react-agent": "tsx eval-react-agent/main.ts",
     "eval-llm-judge": "tsx eval-llm-judge/main.ts",
-    "prompt-registry": "tsx prompt-registry/main.ts"
+    "prompt-registry": "tsx prompt-registry/main.ts",
+    "tour": "tsx tour/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",
