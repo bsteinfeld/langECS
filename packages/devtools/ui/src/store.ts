@@ -12,6 +12,7 @@ export const EVENT_CAP = 2000;
 export const SPAN_CAP = 5000;
 
 export type Tab =
+  | 'learn'
   | 'inspector'
   | 'systems'
   | 'timeline'
@@ -32,6 +33,12 @@ export interface Toast {
   text: string;
 }
 
+/** What a Learn-tab "Show me" pulses: component cards (Inspector) or a system row (Systems). */
+export interface Highlight {
+  components?: string[];
+  system?: string;
+}
+
 export interface State {
   status: ConnectionStatus;
   world: WorldState | null;
@@ -40,6 +47,9 @@ export interface State {
   spans: SpanRecord[];
   selectedEntity: number | null;
   tab: Tab;
+  highlight: Highlight | null;
+  /** True once a `welcome` hello has steered us to the Learn tab (apply once). */
+  appliedWelcome: boolean;
   toasts: Toast[];
 }
 
@@ -51,6 +61,8 @@ export const initialState: State = {
   spans: [],
   selectedEntity: null,
   tab: 'inspector',
+  highlight: null,
+  appliedWelcome: false,
   toasts: [],
 };
 
@@ -60,6 +72,7 @@ export type Action =
   | { type: 'server'; messages: ServerMessage[] }
   | { type: 'select-entity'; entity: number | null }
   | { type: 'set-tab'; tab: Tab }
+  | { type: 'highlight'; highlight: Highlight | null }
   | { type: 'toast'; kind: Toast['kind']; text: string }
   | { type: 'dismiss-toast'; id: number };
 
@@ -77,6 +90,11 @@ export function reducer(state: State, action: Action): State {
       for (const msg of action.messages) {
         switch (msg.type) {
           case 'hello':
+            if (msg.welcome && !next.appliedWelcome) {
+              next = next === state ? { ...state } : next;
+              next.tab = 'learn';
+              next.appliedWelcome = true;
+            }
             break;
           case 'world':
             next = next === state ? { ...state } : next;
@@ -119,6 +137,8 @@ export function reducer(state: State, action: Action): State {
       return { ...state, selectedEntity: action.entity };
     case 'set-tab':
       return { ...state, tab: action.tab };
+    case 'highlight':
+      return { ...state, highlight: action.highlight };
     case 'toast':
       return {
         ...state,
