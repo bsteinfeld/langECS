@@ -89,7 +89,7 @@ export interface SpanRecord {
 // ------------------------------------------------------------ server → client
 
 export type ServerMessage =
-  | { type: 'hello'; protocol: typeof PROTOCOL_VERSION; worldId: string }
+  | { type: 'hello'; protocol: typeof PROTOCOL_VERSION; worldId: string; welcome?: boolean }
   | { type: 'world'; state: WorldState }
   /** Live tap of one run's events (includes the observer-only `run:reject`). */
   | { type: 'run-event'; runId: string; event: ObserverEvent }

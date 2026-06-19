@@ -36,6 +36,8 @@ export interface DevtoolsOptions {
   spanBufferSize?: number;
   /** Open the inspector in the default browser after listening. */
   open?: boolean;
+  /** Land the inspector on the guided "Learn" tab on first connect (e.g. the tour). */
+  welcome?: boolean;
 }
 
 export interface DevtoolsServer {
@@ -442,7 +444,12 @@ export async function startDevtools(
   }
 
   wss.on('connection', (client) => {
-    send(client, { type: 'hello', protocol: PROTOCOL_VERSION, worldId: world.id });
+    send(client, {
+      type: 'hello',
+      protocol: PROTOCOL_VERSION,
+      worldId: world.id,
+      ...(options?.welcome ? { welcome: true } : {}),
+    });
     send(client, worldMessage());
     send(client, traceMessage());
     if (spanBuffer.length > 0) send(client, { type: 'spans', spans: [...spanBuffer] });

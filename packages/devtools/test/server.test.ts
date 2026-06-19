@@ -647,3 +647,21 @@ test('world push at step:applied reports the step the state belongs to', async (
     | undefined;
   expect(worldAtStart?.state.running).toBe(true);
 });
+
+test('hello carries welcome:true only when the option is set', async () => {
+  const world = createWorld({ id: `dtsrv-welcome-${Math.random().toString(36).slice(2)}` });
+  const server = await start(world, { welcome: true });
+  const client = await connect(server);
+  const hello = await client.waitFor((m) => m.type === 'hello', 'hello');
+  expect(hello).toMatchObject({ type: 'hello', welcome: true });
+});
+
+test('hello omits welcome by default', async () => {
+  const world = createWorld({ id: `dtsrv-nowelcome-${Math.random().toString(36).slice(2)}` });
+  const server = await start(world);
+  const client = await connect(server);
+  const hello = (await client.waitFor((m) => m.type === 'hello', 'hello')) as {
+    welcome?: boolean;
+  };
+  expect(hello.welcome).toBeUndefined();
+});
