@@ -3,7 +3,7 @@
 // one-click "send a message" action. Pure consumer of the store + existing
 // commands — it never mutates the world directly (R16).
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LEARN_STEPS, type LearnStep } from '../learn-steps';
 import { useStore } from '../store';
 
@@ -33,14 +33,18 @@ function StepNav({ index, count, onPrev, onNext }: {
 export function LearnTab() {
   const { state, dispatch, command } = useStore();
   const [index, setIndex] = useState(0);
+  const timerRef = useRef<number | null>(null);
   // index is always clamped to [0, LEARN_STEPS.length - 1] by the nav callbacks.
   // biome-ignore lint/style/noNonNullAssertion: index is always in-range
   const step: LearnStep = LEARN_STEPS[index]!;
   const world = state.world;
 
+  useEffect(() => () => { if (timerRef.current !== null) window.clearTimeout(timerRef.current); }, []);
+
   const pulse = (highlight: { components?: string[]; system?: string }): void => {
     dispatch({ type: 'highlight', highlight });
-    window.setTimeout(() => dispatch({ type: 'highlight', highlight: null }), HIGHLIGHT_MS);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => dispatch({ type: 'highlight', highlight: null }), HIGHLIGHT_MS);
   };
 
   const showMe = (): void => {

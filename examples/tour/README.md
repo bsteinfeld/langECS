@@ -19,6 +19,8 @@ Open the printed URL. The inspector starts on the **Learn** tab — step through
 | eval case | scorer → score → verdict | Inspector → `eval:Score`, `eval:Verdict` |
 | bench report | comparing models (pass-rate, latency, tokens, cost) | Inspector → `bench:ComparisonReport` |
 
+> **Note:** The bench comparison numbers are canned/illustrative — copied from a real `bench-devtools-demo` run, not produced live by this offline tour.
+
 ## Where to go next
 
 - `pnpm -C examples eval-react-agent` — run an agent against a dataset
