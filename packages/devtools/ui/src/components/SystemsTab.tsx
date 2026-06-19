@@ -69,7 +69,15 @@ export function SystemsTab() {
             const open = expanded === sys.key;
             return (
               <Fragment key={sys.key}>
-                <tr className={open ? 'sys-row open' : 'sys-row'}>
+                <tr
+                  className={[
+                    'sys-row',
+                    open ? 'open' : '',
+                    state.highlight?.system === sys.key ? 'pulse' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
                   <td className="sys-expand">
                     <button
                       type="button"

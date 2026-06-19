@@ -2062,7 +2062,7 @@ button.lane-name:hover {
 }
 .learn-card {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
   background: var(--bg-panel);
 }
@@ -2090,4 +2090,19 @@ button.lane-name:hover {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
   opacity: 0.7;
+}
+
+/* Learn-tab "Show me" attention pulse (auto-clears after ~2.5s via the store). */
+@keyframes langecs-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow: 0 0 0 3px var(--accent, #6ea8fe);
+  }
+}
+.pulse {
+  animation: langecs-pulse 1.2s ease-in-out 2;
+  border-color: var(--accent, #6ea8fe) !important;
 }

@@ -59,9 +59,11 @@ function ConfirmButton({
 const ComponentCard = memo(function ComponentCard({
   entityId,
   comp,
+  highlighted,
 }: {
   entityId: number;
   comp: ComponentState;
+  highlighted: boolean;
 }) {
   const { command } = useStore();
   const [editing, setEditing] = useState(false);
@@ -102,7 +104,7 @@ const ComponentCard = memo(function ComponentCard({
   };
 
   return (
-    <section className="card">
+    <section className={highlighted ? 'card pulse' : 'card'}>
       <div className="card-head">
         <span className="card-title">{comp.name}</span>
         {comp.tag && <span className="chip chip-flag">tag</span>}
@@ -332,7 +334,12 @@ export function InspectorTab() {
         <EmptyState title="No components" hint="Add one below to give this entity state." />
       )}
       {entity.components.map((comp) => (
-        <ComponentCard key={comp.name} entityId={entity.id} comp={comp} />
+        <ComponentCard
+          key={comp.name}
+          entityId={entity.id}
+          comp={comp}
+          highlighted={state.highlight?.components?.includes(comp.name) ?? false}
+        />
       ))}
       <AddComponentRow entity={entity} />
     </div>
