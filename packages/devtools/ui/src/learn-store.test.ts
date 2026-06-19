@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import type { ServerMessage } from '../src/protocol';
-import { initialState, reducer, type State } from '../ui/src/store';
+import type { ServerMessage } from '../../src/protocol';
+import { initialState, reducer, type State } from './store';
 
 const helloWelcome: ServerMessage = {
   type: 'hello',

@@ -5,6 +5,6 @@ import { defineConfig } from 'vitest/config';
 // precedence and points test discovery at the server's test/ directory.
 export default defineConfig({
   test: {
-    include: ['test/**/*.test.ts'],
+    include: ['test/**/*.test.ts', 'ui/**/*.test.ts'],
   },
 });
