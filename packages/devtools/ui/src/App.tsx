@@ -5,6 +5,7 @@ import { EventsTab } from './components/EventsTab';
 import { Header } from './components/Header';
 import { InspectorTab } from './components/InspectorTab';
 import { InterruptsTab } from './components/InterruptsTab';
+import { LearnTab } from './components/LearnTab';
 import { SystemsTab } from './components/SystemsTab';
 import { TimelineTab } from './components/TimelineTab';
 import { TimeTravelTab } from './components/TimeTravelTab';
@@ -13,6 +14,7 @@ import { TracesTab } from './components/TracesTab';
 import { type Tab, useStore } from './store';
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'learn', label: '📖 Learn' },
   { id: 'inspector', label: 'Inspector' },
   { id: 'systems', label: 'Systems' },
   { id: 'timeline', label: 'Timeline' },
@@ -24,6 +26,8 @@ const TABS: { id: Tab; label: string }[] = [
 
 function TabBody({ tab }: { tab: Tab }) {
   switch (tab) {
+    case 'learn':
+      return <LearnTab />;
     case 'inspector':
       return <InspectorTab />;
     case 'systems':

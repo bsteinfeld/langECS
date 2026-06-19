@@ -2050,3 +2050,44 @@ button.lane-name:hover {
     transform: translateY(0);
   }
 }
+
+/* ----------------------------------------------------------------- Learn tab */
+.learn {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+.learn-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  background: var(--bg-panel);
+}
+.learn-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+.learn-body {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text);
+}
+.learn-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.learn-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.learn-progress {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
