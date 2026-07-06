@@ -3,27 +3,14 @@
 // (Messages append + MessageWaiting when the tag exists in the registry).
 
 import { memo, useState } from 'react';
+import type { ChatMsg } from '../chat-shape';
+import { isChatTranscript } from '../chat-shape';
 import { jsonPreview } from '../format';
 import { useStore } from '../store';
 import { SendIcon } from './icons';
 
-export interface ChatMsg {
-  role: string;
-  content?: unknown;
-  toolCalls?: { id?: string; name?: string; args?: unknown }[];
-  toolCallId?: string;
-  name?: string;
-}
-
-export function isChatTranscript(value: unknown): value is ChatMsg[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (m) =>
-        m !== null && typeof m === 'object' && typeof (m as { role?: unknown }).role === 'string',
-    )
-  );
-}
+export type { ChatMsg } from '../chat-shape';
+export { isChatTranscript } from '../chat-shape';
 
 const ROLE_LABEL: Record<string, string> = {
   system: 'system',
