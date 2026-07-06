@@ -194,11 +194,16 @@ export function WorldTab() {
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   // Snapshot of the last render's placeable tokens, to know where the departed stood.
   const lastPlaceable = useRef<Map<number, { icon: string; name: string; pos: Point }>>(new Map());
+  // Invariant: ghosts render only for entities that left the *world* (despawn),
+  // never for entities that merely left the current layout — e.g. a free→spatial
+  // switch moves position-less entities to the unplaced tray; they stay alive
+  // and must not ghost.
   useEffect(() => {
     if (mode === 'zones') {
       lastPlaceable.current = new Map();
       return;
     }
+    const liveIds = new Set((world?.entities ?? []).map((e) => e.id));
     const current = new Map(
       placeable.map(({ entity, pos }) => [
         entity.id,
@@ -207,15 +212,16 @@ export function WorldTab() {
     );
     const departed: Ghost[] = [];
     for (const [id, info] of lastPlaceable.current) {
-      if (!current.has(id)) departed.push({ id, ...info });
+      if (!current.has(id) && !liveIds.has(id)) departed.push({ id, ...info });
     }
     lastPlaceable.current = current;
     if (departed.length > 0) {
-      setGhosts((g) => [...g, ...departed]);
       const ids = new Set(departed.map((d) => d.id));
+      // Replace any same-id ghost instead of appending a duplicate key.
+      setGhosts((g) => [...g.filter((x) => !ids.has(x.id)), ...departed]);
       window.setTimeout(() => setGhosts((g) => g.filter((ghost) => !ids.has(ghost.id))), 500);
     }
-  }, [placeable, mode]);
+  }, [placeable, mode, world]);
 
   if (!world) {
     return <EmptyState title="Connecting…" hint="Waiting for the world snapshot." />;
