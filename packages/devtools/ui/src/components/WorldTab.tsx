@@ -14,7 +14,7 @@ import {
 import type { EntityState } from '../../../src/protocol';
 import { entityById, useStore } from '../store';
 import { fallbackSlot, type Layout, loadLayout, saveLayout } from '../world/layout-store';
-import { activePairs } from '../world/liveness';
+import { activePairs, bubblesSince } from '../world/liveness';
 import {
   classifyEntity,
   displayName,
@@ -44,15 +44,24 @@ interface ViewState {
 
 type LayoutMode = 'zones' | 'free' | 'spatial';
 
+interface Ghost {
+  id: number;
+  icon: string;
+  name: string;
+  pos: Point;
+}
+
 function Token({
   entity,
   running,
   selected,
+  bubble,
   onSelect,
 }: {
   entity: EntityState;
   running: string[];
   selected: boolean;
+  bubble: { text: string; tool: boolean } | null;
   onSelect(id: number): void;
 }) {
   const zone = classifyEntity(entity);
@@ -68,6 +77,12 @@ function Token({
       aria-pressed={selected}
       onClick={() => onSelect(entity.id)}
     >
+      {bubble !== null && (
+        <span className={bubble.tool ? 'world-bubble tool' : 'world-bubble'}>
+          {bubble.tool && <span aria-hidden="true">🔧 </span>}
+          {bubble.text}
+        </span>
+      )}
       <span className="world-token-icon">{zoneIcon(zone)}</span>
       <span className="world-token-name">
         {displayName(entity)} <span className="world-token-id">#{entity.id}</span>
@@ -94,6 +109,37 @@ export function WorldTab() {
 
   const active = useMemo(() => activePairs(state.events), [state.events]);
   const selected = entityById(world, state.selectedEntity);
+
+  const [bubbles, setBubbles] = useState<Map<number, { text: string; tool: boolean; seq: number }>>(
+    new Map(),
+  );
+  // Cursor starts at the newest replayed event: history must not bubble on mount.
+  const bubbleCursor = useRef<number | null>(null);
+  useEffect(() => {
+    const newest = state.events[state.events.length - 1]?.seq ?? 0;
+    if (bubbleCursor.current === null) {
+      bubbleCursor.current = newest;
+      return;
+    }
+    const fresh = bubblesSince(state.events, bubbleCursor.current);
+    bubbleCursor.current = Math.max(bubbleCursor.current, newest);
+    if (fresh.length === 0) return;
+    setBubbles((prev) => {
+      const next = new Map(prev);
+      for (const b of fresh) next.set(b.entity, { text: b.text, tool: b.tool, seq: b.seq });
+      return next;
+    });
+    // Each batch schedules its own expiry; stale entries are dropped by seq —
+    // a newer bubble for the same entity survives an older batch's timeout.
+    const seqs = new Set(fresh.map((b) => b.seq));
+    window.setTimeout(() => {
+      setBubbles((prev) => {
+        const next = new Map<number, { text: string; tool: boolean; seq: number }>();
+        for (const [entity, bubble] of prev) if (!seqs.has(bubble.seq)) next.set(entity, bubble);
+        return next;
+      });
+    }, 4000);
+  }, [state.events]);
 
   const byZone = useMemo(() => {
     const groups = new Map<Zone, EntityState[]>();
@@ -144,6 +190,32 @@ export function WorldTab() {
     () => (mode === 'spatial' ? (world?.entities ?? []).filter((e) => spatialPosition(e) === null) : []),
     [world, mode],
   );
+
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  // Snapshot of the last render's placeable tokens, to know where the departed stood.
+  const lastPlaceable = useRef<Map<number, { icon: string; name: string; pos: Point }>>(new Map());
+  useEffect(() => {
+    if (mode === 'zones') {
+      lastPlaceable.current = new Map();
+      return;
+    }
+    const current = new Map(
+      placeable.map(({ entity, pos }) => [
+        entity.id,
+        { icon: zoneIcon(classifyEntity(entity)), name: displayName(entity), pos },
+      ]),
+    );
+    const departed: Ghost[] = [];
+    for (const [id, info] of lastPlaceable.current) {
+      if (!current.has(id)) departed.push({ id, ...info });
+    }
+    lastPlaceable.current = current;
+    if (departed.length > 0) {
+      setGhosts((g) => [...g, ...departed]);
+      const ids = new Set(departed.map((d) => d.id));
+      window.setTimeout(() => setGhosts((g) => g.filter((ghost) => !ids.has(ghost.id))), 500);
+    }
+  }, [placeable, mode]);
 
   if (!world) {
     return <EmptyState title="Connecting…" hint="Waiting for the world snapshot." />;
@@ -312,6 +384,7 @@ export function WorldTab() {
                             entity={entity}
                             running={active.get(entity.id) ?? []}
                             selected={entity.id === state.selectedEntity}
+                            bubble={bubbles.get(entity.id) ?? null}
                             onSelect={onSelect}
                           />
                         ))}
@@ -335,8 +408,19 @@ export function WorldTab() {
                       entity={entity}
                       running={active.get(entity.id) ?? []}
                       selected={entity.id === state.selectedEntity}
+                      bubble={bubbles.get(entity.id) ?? null}
                       onSelect={onSelect}
                     />
+                  </div>
+                ))}
+                {ghosts.map((ghost) => (
+                  <div
+                    key={`ghost-${ghost.id}`}
+                    className="world-place world-ghost"
+                    style={{ left: ghost.pos.x, top: ghost.pos.y }}
+                  >
+                    <span className="world-token-icon">{ghost.icon}</span>
+                    <span className="world-token-name">{ghost.name}</span>
                   </div>
                 ))}
               </div>

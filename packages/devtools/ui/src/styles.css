@@ -2318,3 +2318,95 @@ button.lane-name:hover {
   font-size: 10px;
   opacity: 0.6;
 }
+
+.world-token {
+  animation: world-fade-in 0.3s ease-out;
+}
+
+.world-token.running {
+  animation: world-run-pulse 1.6s ease-out infinite;
+}
+
+.world-bubble {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 220px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  border-bottom-left-radius: 2px;
+  background: #f5f5f4;
+  color: #333;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 3;
+  animation: world-bubble-in 0.25s ease-out;
+}
+
+.world-bubble.tool {
+  background: #ede9fe;
+}
+
+.world-ghost {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: world-fade-out 0.5s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes world-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes world-fade-out {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes world-run-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(167, 139, 250, 0);
+  }
+}
+
+@keyframes world-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Spec: playful signals collapse to static state changes for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .world-token,
+  .world-token.running,
+  .world-bubble,
+  .world-ghost {
+    animation: none;
+  }
+  .world-token.running {
+    box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.45);
+  }
+}
