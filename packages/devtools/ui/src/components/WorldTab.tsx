@@ -6,16 +6,20 @@
 import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
 import type { EntityState } from '../../../src/protocol';
 import { entityById, useStore } from '../store';
+import { fallbackSlot, type Layout, loadLayout, saveLayout } from '../world/layout-store';
 import { activePairs } from '../world/liveness';
 import {
   classifyEntity,
   displayName,
+  type Point,
+  spatialPosition,
   statusLine,
   ZONE_ORDER,
   type Zone,
@@ -29,12 +33,16 @@ import { SpawnModal } from './SpawnModal';
 
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 3;
+const SPATIAL_SCALE = 60;
+const SPATIAL_OFFSET = 60;
 
 interface ViewState {
   zoom: number;
   x: number;
   y: number;
 }
+
+type LayoutMode = 'zones' | 'free' | 'spatial';
 
 function Token({
   entity,
@@ -76,6 +84,14 @@ export function WorldTab() {
   const [spawning, setSpawning] = useState(false);
   const panRef = useRef<{ pointerId: number; startX: number; startY: number; origin: ViewState } | null>(null);
 
+  const [mode, setMode] = useState<LayoutMode>('zones');
+  const [layout, setLayout] = useState<Layout>({});
+  const worldId = world?.worldId;
+  // Reload saved positions when the connected world changes.
+  useEffect(() => {
+    if (worldId !== undefined) setLayout(loadLayout(worldId, window.localStorage));
+  }, [worldId]);
+
   const active = useMemo(() => activePairs(state.events), [state.events]);
   const selected = entityById(world, state.selectedEntity);
 
@@ -90,6 +106,44 @@ export function WorldTab() {
     for (const list of groups.values()) list.sort((a, b) => a.id - b.id);
     return groups;
   }, [world]);
+
+  const hasSpatial = useMemo(
+    () => (world?.entities ?? []).some((e) => spatialPosition(e) !== null),
+    [world],
+  );
+  // A world without coordinates cannot stay in spatial mode.
+  useEffect(() => {
+    if (mode === 'spatial' && !hasSpatial) setMode('zones');
+  }, [mode, hasSpatial]);
+
+  const dragRef = useRef<{
+    pointerId: number;
+    id: number;
+    startX: number;
+    startY: number;
+    origin: Point;
+  } | null>(null);
+
+  /** Free-mode position: saved layout, else a deterministic grid slot. */
+  const freePos = (entity: EntityState, index: number): Point => layout[entity.id] ?? fallbackSlot(index);
+
+  const placeable = useMemo(() => {
+    const entities = world?.entities ?? [];
+    if (mode === 'spatial') {
+      return entities.flatMap((entity) => {
+        const p = spatialPosition(entity);
+        return p === null
+          ? []
+          : [{ entity, pos: { x: SPATIAL_OFFSET + p.x * SPATIAL_SCALE, y: SPATIAL_OFFSET + p.y * SPATIAL_SCALE } }];
+      });
+    }
+    return entities.map((entity, index) => ({ entity, pos: freePos(entity, index) }));
+  }, [world, mode, layout]);
+
+  const unplaced = useMemo(
+    () => (mode === 'spatial' ? (world?.entities ?? []).filter((e) => spatialPosition(e) === null) : []),
+    [world, mode],
+  );
 
   if (!world) {
     return <EmptyState title="Connecting…" hint="Waiting for the world snapshot." />;
@@ -125,9 +179,65 @@ export function WorldTab() {
     if (panRef.current?.pointerId === e.pointerId) panRef.current = null;
   };
 
+  const onTokenPointerDown = (e: ReactPointerEvent<HTMLElement>, entity: EntityState, index: number): void => {
+    if (mode !== 'free') return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = {
+      pointerId: e.pointerId,
+      id: entity.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      origin: freePos(entity, index),
+    };
+  };
+
+  const onTokenPointerMove = (e: ReactPointerEvent<HTMLElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const next: Point = {
+      x: drag.origin.x + (e.clientX - drag.startX) / view.zoom,
+      y: drag.origin.y + (e.clientY - drag.startY) / view.zoom,
+    };
+    setLayout((l) => ({ ...l, [drag.id]: next }));
+  };
+
+  const onTokenPointerUp = (e: ReactPointerEvent<HTMLElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    if (worldId !== undefined) {
+      // Persist the position the drag ended on (state updates are async —
+      // recompute from the ref origin + final pointer, same math as move).
+      const finalPos: Point = {
+        x: drag.origin.x + (e.clientX - drag.startX) / view.zoom,
+        y: drag.origin.y + (e.clientY - drag.startY) / view.zoom,
+      };
+      setLayout((l) => {
+        const next = { ...l, [drag.id]: finalPos };
+        saveLayout(worldId, next, window.localStorage);
+        return next;
+      });
+    }
+  };
+
+  const modes: LayoutMode[] = hasSpatial ? ['zones', 'free', 'spatial'] : ['zones', 'free'];
+
   return (
     <div className="world">
       <div className="world-toolbar">
+        <div className="seg" role="group" aria-label="Layout mode">
+          {modes.map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={mode === m ? 'seg-btn active' : 'seg-btn'}
+              onClick={() => setMode(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
         <div className="seg" role="group" aria-label="Zoom">
           <button
             type="button"
@@ -187,7 +297,7 @@ export function WorldTab() {
           >
             {world.entities.length === 0 ? (
               <EmptyState title="No entities yet" hint="Spawn one from the toolbar." />
-            ) : (
+            ) : mode === 'zones' ? (
               <div className="world-zones">
                 {ZONE_ORDER.map((zone) => {
                   const entities = byZone.get(zone);
@@ -210,8 +320,39 @@ export function WorldTab() {
                   );
                 })}
               </div>
+            ) : (
+              <div className="world-free">
+                {placeable.map(({ entity, pos }, index) => (
+                  <div
+                    key={entity.id}
+                    className={mode === 'free' ? 'world-place draggable' : 'world-place'}
+                    style={{ left: pos.x, top: pos.y }}
+                    onPointerDown={(e) => onTokenPointerDown(e, entity, index)}
+                    onPointerMove={onTokenPointerMove}
+                    onPointerUp={onTokenPointerUp}
+                  >
+                    <Token
+                      entity={entity}
+                      running={active.get(entity.id) ?? []}
+                      selected={entity.id === state.selectedEntity}
+                      onSelect={onSelect}
+                    />
+                  </div>
+                ))}
+              </div>
             )}
           </div>
+
+          {mode === 'spatial' && unplaced.length > 0 && (
+            <div className="world-tray">
+              <span className="world-tray-label">no position →</span>
+              {unplaced.map((entity) => (
+                <button key={entity.id} type="button" className="chip chip-comp" onClick={() => onSelect(entity.id)}>
+                  {zoneIcon(classifyEntity(entity))} {displayName(entity)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {state.selectedEntity !== null && (

@@ -2284,3 +2284,37 @@ button.lane-name:hover {
   justify-content: flex-end;
   margin-bottom: 6px;
 }
+
+.world-free {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.world-place {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.world-place.draggable {
+  cursor: move;
+}
+
+.world-tray {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border, #222a33);
+  background: rgba(12, 15, 19, 0.9);
+}
+
+.world-tray-label {
+  font-size: 10px;
+  opacity: 0.6;
+}
