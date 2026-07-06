@@ -11,9 +11,11 @@ import { TimelineTab } from './components/TimelineTab';
 import { TimeTravelTab } from './components/TimeTravelTab';
 import { Toasts } from './components/Toasts';
 import { TracesTab } from './components/TracesTab';
+import { WorldTab } from './components/WorldTab';
 import { type Tab, useStore } from './store';
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'world', label: '🌍 World' },
   { id: 'learn', label: '📖 Learn' },
   { id: 'inspector', label: 'Inspector' },
   { id: 'systems', label: 'Systems' },
@@ -26,6 +28,8 @@ const TABS: { id: Tab; label: string }[] = [
 
 function TabBody({ tab }: { tab: Tab }) {
   switch (tab) {
+    case 'world':
+      return <WorldTab />;
     case 'learn':
       return <LearnTab />;
     case 'inspector':

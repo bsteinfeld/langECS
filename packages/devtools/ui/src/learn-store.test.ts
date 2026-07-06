@@ -23,7 +23,7 @@ test('a welcome hello switches to the learn tab exactly once', () => {
 test('a hello without welcome does not change the tab', () => {
   const hello: ServerMessage = { type: 'hello', protocol: 1, worldId: 'x' };
   const next = reducer(initialState, { type: 'server', messages: [hello] });
-  expect(next.tab).toBe('inspector');
+  expect(next.tab).toBe('world');
   expect(next.appliedWelcome).toBe(false);
 });
 

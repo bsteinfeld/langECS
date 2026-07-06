@@ -12,6 +12,7 @@ export const EVENT_CAP = 2000;
 export const SPAN_CAP = 5000;
 
 export type Tab =
+  | 'world'
   | 'learn'
   | 'inspector'
   | 'systems'
@@ -60,7 +61,7 @@ export const initialState: State = {
   events: [],
   spans: [],
   selectedEntity: null,
-  tab: 'inspector',
+  tab: 'world',
   highlight: null,
   appliedWelcome: false,
   toasts: [],

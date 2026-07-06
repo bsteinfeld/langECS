@@ -82,7 +82,7 @@ export function EntityList() {
 
   const onSelect = (id: number): void => {
     dispatch({ type: 'select-entity', entity: id });
-    dispatch({ type: 'set-tab', tab: 'inspector' });
+    if (state.tab !== 'world') dispatch({ type: 'set-tab', tab: 'inspector' });
   };
 
   return (
