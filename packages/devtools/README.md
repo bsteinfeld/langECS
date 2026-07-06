@@ -14,6 +14,7 @@ Everything the engine knows is on screen, live:
 
 | Panel | Shows | Lets you |
 |---|---|---|
+| **World** | the live world as a top-down scene: tokens per entity, zone or free/drag or coordinate layouts, speech bubbles and system pulses as runs execute | pan/zoom, drag tokens (Free), select a token to edit it in a side panel, spawn |
 | **Inspector** | every entity's components as JSON trees; `Messages` rendered as a chat transcript | edit component values, add/remove components, despawn, send chat messages |
 | **Systems** | registered systems, effective queries (agent auto-tags included), matched entities, pending (dirty) pairs and *why* they're dirty | jump to matched entities |
 | **Timeline** | the flight recorder (R42): per step — scheduled/vetoed pairs, run durations, buffered writes, applied changes, spawns/despawns, dropped writes | inspect any step, jump to changed entities |
