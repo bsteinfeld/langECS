@@ -105,7 +105,7 @@ body, it invents nothing:
 |---|---|---|
 | speech bubble (~4 s, truncated) | snapshot diff: a `Chat`-transcript-like component gained an assistant message | bubble above the token |
 | system pulse | run events / timeline: a (system, entity) pair currently running | purple pulse ring + status line names the system |
-| tool-call effect | tool events already present in the event stream | brief effect on the token |
+| tool-call effect | `toolCalls` on an assistant message in a `step:applied` change (core emits no dedicated tool events) | brief effect on the token |
 | spawn / despawn | snapshot diff | token fades in / out |
 
 Honor `prefers-reduced-motion`: animations collapse to static state changes (bubble appears
