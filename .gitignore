@@ -6,3 +6,6 @@ coverage/
 .env
 .env.local
 .env.*.local
+
+# superpowers brainstorm mockups
+.superpowers/
