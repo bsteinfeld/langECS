@@ -284,6 +284,11 @@ export function WorldTab() {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     dragRef.current = null;
+    // Pointer capture (set on pointerdown) retargets the compat click event to
+    // this wrapper, so the inner Token button's onClick never fires in free
+    // mode — a tap (near-zero displacement) must select here instead.
+    const displacement = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+    if (displacement < 4) onSelect(drag.id);
     if (worldId !== undefined) {
       // Persist the position the drag ended on (state updates are async —
       // recompute from the ref origin + final pointer, same math as move).
@@ -297,6 +302,14 @@ export function WorldTab() {
         return next;
       });
     }
+  };
+
+  const onTokenPointerCancel = (e: ReactPointerEvent<HTMLElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    // Gesture aborted by the browser/OS — revert, don't persist.
+    setLayout((l) => ({ ...l, [drag.id]: drag.origin }));
   };
 
   const modes: LayoutMode[] = hasSpatial ? ['zones', 'free', 'spatial'] : ['zones', 'free'];
@@ -409,6 +422,7 @@ export function WorldTab() {
                     onPointerDown={(e) => onTokenPointerDown(e, entity, index)}
                     onPointerMove={onTokenPointerMove}
                     onPointerUp={onTokenPointerUp}
+                    onPointerCancel={onTokenPointerCancel}
                   >
                     <Token
                       entity={entity}
@@ -448,6 +462,11 @@ export function WorldTab() {
         {state.selectedEntity !== null && (
           <aside className="world-panel">
             <div className="world-panel-head">
+              {selected && (
+                <span className="world-panel-title">
+                  {zoneIcon(classifyEntity(selected))} {displayName(selected)}
+                </span>
+              )}
               <button
                 type="button"
                 className="btn"

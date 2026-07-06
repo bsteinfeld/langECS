@@ -2285,6 +2285,12 @@ button.lane-name:hover {
   margin-bottom: 6px;
 }
 
+.world-panel-title {
+  flex: 1;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
 .world-free {
   position: relative;
   width: 100%;
