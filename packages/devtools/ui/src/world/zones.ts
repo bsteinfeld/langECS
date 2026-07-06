@@ -25,14 +25,16 @@ export function zoneIcon(zone: Zone): string {
 }
 
 /**
- * Zone inference (spec §Placement engine): eval:* → evals, bench:* → bench,
+ * Zone inference (spec §Placement engine): bench:* → bench, eval:* → evals,
  * then agent-shaped (server-derived agent tags, or a non-empty chat
  * transcript — an empty one is shape without evidence), else other.
+ * Bench checked first because bench entities (reports, candidates) carry
+ * eval bookkeeping tags like eval:DatasetTag — bench is the more specific signal.
  */
 export function classifyEntity(entity: EntityState): Zone {
   const names = entity.components.map((c) => c.name);
-  if (names.some((n) => n.startsWith('eval:'))) return 'evals';
   if (names.some((n) => n.startsWith('bench:'))) return 'bench';
+  if (names.some((n) => n.startsWith('eval:'))) return 'evals';
   if (entity.agents.length > 0) return 'agents';
   if (entity.components.some((c) => isChatTranscript(c.value) && c.value.length > 0)) {
     return 'agents';

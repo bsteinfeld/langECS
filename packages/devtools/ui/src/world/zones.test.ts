@@ -45,6 +45,18 @@ test('classifyEntity: bench:* components', () => {
   ).toBe('bench');
 });
 
+test('classifyEntity: bench wins over eval bookkeeping tags', () => {
+  // writeComparisonReport spawns bench entities with both eval:DatasetTag and bench:ComparisonReport
+  expect(
+    classifyEntity(
+      entity(4, [
+        { name: 'eval:DatasetTag', value: 'tag' },
+        { name: 'bench:ComparisonReport', value: { candidates: [] } },
+      ]),
+    ),
+  ).toBe('bench');
+});
+
 test('classifyEntity: agents via server-derived agent tags or a non-empty transcript', () => {
   expect(classifyEntity(entity(4, [{ name: 'Whatever', value: 1 }], ['researcher']))).toBe(
     'agents',

@@ -74,8 +74,8 @@ stays in sync with the Inspector tab.
 **Zone classification** is a pure function `classifyEntity(components) → 'agents' | 'evals'
 | 'bench' | 'other'`, tested in isolation:
 
+- any component name starting `bench:` → **Bench** (checked before `eval:` — bench artifacts carry eval bookkeeping tags like `eval:DatasetTag`)
 - any component name starting `eval:` → **Evals**
-- any component name starting `bench:` → **Bench**
 - agent-shaped → **Agents** — reuse the agent detection the server already applies for agent
   auto-tags (Systems tab) where the store has it; fall back to component-name heuristics
   (`Chat`, model-ref components) otherwise. Exact predicate finalized during implementation
