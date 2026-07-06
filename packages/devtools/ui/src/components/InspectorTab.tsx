@@ -284,26 +284,14 @@ function AddComponentRow({ entity }: { entity: EntityState }) {
   );
 }
 
-export function InspectorTab() {
+/**
+ * The inspector body for one entity — shared by the Inspector tab and the
+ * World tab's side panel. Callers must key it by entity id: switching the
+ * selection must remount every card (open editors, armed confirms, composer
+ * drafts would otherwise silently retarget the newly selected entity).
+ */
+export function EntityPanel({ entity }: { entity: EntityState }) {
   const { state, command, dispatch } = useStore();
-  const entity = entityById(state.world, state.selectedEntity);
-
-  if (state.selectedEntity === null) {
-    return (
-      <EmptyState
-        title="No entity selected"
-        hint="Pick an entity from the sidebar to inspect and edit its components."
-      />
-    );
-  }
-  if (!entity) {
-    return (
-      <EmptyState
-        title={`Entity #${state.selectedEntity} no longer exists`}
-        hint="It was despawned — select another entity from the sidebar."
-      />
-    );
-  }
 
   const despawn = async (): Promise<void> => {
     const result = await command({ type: 'despawn', entity: entity.id });
@@ -311,10 +299,7 @@ export function InspectorTab() {
   };
 
   return (
-    // Keyed by entity: switching the selection must remount every card —
-    // otherwise an open editor, armed confirm, or composer draft keyed only
-    // by component name silently retargets the newly selected entity.
-    <div className="inspector" key={entity.id}>
+    <div className="inspector">
       <div className="inspector-head">
         <h2 className="inspector-id">#{entity.id}</h2>
         {entity.agents.map((agent) => (
@@ -344,4 +329,28 @@ export function InspectorTab() {
       <AddComponentRow entity={entity} />
     </div>
   );
+}
+
+export function InspectorTab() {
+  const { state } = useStore();
+  const entity = entityById(state.world, state.selectedEntity);
+
+  if (state.selectedEntity === null) {
+    return (
+      <EmptyState
+        title="No entity selected"
+        hint="Pick an entity from the sidebar to inspect and edit its components."
+      />
+    );
+  }
+  if (!entity) {
+    return (
+      <EmptyState
+        title={`Entity #${state.selectedEntity} no longer exists`}
+        hint="It was despawned — select another entity from the sidebar."
+      />
+    );
+  }
+
+  return <EntityPanel key={entity.id} entity={entity} />;
 }
