@@ -72,6 +72,24 @@ export class AudioStore {
 
 // ------------------------------------------------------------------ OpenAI
 
+/** OpenAI TTS models the UI offers, cheapest/most-steerable first. */
+export const OPENAI_TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'] as const;
+
+/** The OpenAI voice catalog the UI lets you assign per persona. */
+export const OPENAI_VOICES = [
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'fable',
+  'nova',
+  'onyx',
+  'sage',
+  'shimmer',
+  'verse',
+] as const;
+
 export interface OpenAIAudioOptions {
   apiKey: string;
   ttsModel?: string; // default 'gpt-4o-mini-tts'
@@ -105,6 +123,52 @@ export function openaiTTS(options: OpenAIAudioOptions): TextToSpeech {
         voice: voice.openaiVoice,
         text,
         audioBase64,
+        approxMs: estimateMs(text),
+      };
+    },
+  };
+}
+
+/** Real OpenAI TTS with a low-latency streaming path: the mp3 response body is
+ *  read as it arrives and each chunk is handed to `onChunk` (base64) for
+ *  progressive playback, cutting time-to-first-audio. Also implements the
+ *  buffered `synthesize` for callers that don't stream. */
+export function openaiStreamingTTS(options: OpenAIAudioOptions): TextToSpeech {
+  const base = options.baseUrl ?? 'https://api.openai.com/v1';
+  const model = options.ttsModel ?? 'gpt-4o-mini-tts';
+  const request = (text: string, voice: VoiceValue) =>
+    fetch(`${base}/audio/speech`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        voice: voice.openaiVoice,
+        input: text,
+        response_format: 'mp3',
+      }),
+    });
+  const buffered = openaiTTS(options);
+  return {
+    synthesize: buffered.synthesize,
+    async stream(text, voice, onChunk): Promise<SpeechClip> {
+      const res = await request(text, voice);
+      if (!res.ok || res.body === null)
+        throw new Error(`OpenAI TTS ${res.status}: ${await res.text()}`);
+      const reader = res.body.getReader();
+      const parts: Uint8Array[] = [];
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          parts.push(value);
+          onChunk(Buffer.from(value).toString('base64'));
+        }
+      }
+      return {
+        format: 'mp3',
+        voice: voice.openaiVoice,
+        text,
+        audioBase64: Buffer.concat(parts).toString('base64'),
         approxMs: estimateMs(text),
       };
     },

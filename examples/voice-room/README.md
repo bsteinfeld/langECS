@@ -17,8 +17,25 @@ pnpm -C examples voice-room-server   # the browser room → http://localhost:878
 The browser room works with **zero API keys**: it uses the browser's built-in
 Web Speech API for recognition and gives each persona a distinct synthesized
 voice. Set `OPENAI_API_KEY` in the repo-root `.env.local` to have each persona
-*think* with `gpt-4o-mini`; add `VOICE_ROOM_OPENAI_AUDIO=1` to also swap in
-OpenAI Whisper + TTS for higher-quality audio.
+*think* with `gpt-4o-mini`, and pick OpenAI voices in the setup panel.
+
+### In the browser room
+
+- **Setup panel** (⚙) — add, edit, or remove personas *before the conversation
+  starts*: name, blurb, system prompt, interests, private knowledge, baseline
+  mood (sliders), and voice. Applying rebuilds the world from your cast.
+- **Audio backend** — choose per session in setup:
+  - **Browser (Web Speech)** — zero-key, distinct rate/pitch per persona.
+  - **OpenAI TTS** — pick the model (`gpt-4o-mini-tts` / `tts-1` / `tts-1-hd`)
+    and a voice per persona; needs a key. A **streaming** toggle plays the mp3
+    progressively (via MediaSource) for lower time-to-first-audio, with a
+    buffered fallback.
+- **Stop** — halt the conversation and silence playback at any time.
+- **"Wants the floor" details** — click any persona card to expand the exact
+  factor breakdown behind its speaking probability (eagerness, relevance,
+  arousal, happiness, being addressed, just-spoke penalty → raw → softmax `p`).
+- **Push-to-talk / type** — hold the button and speak, or type; either way,
+  cutting in preempts the floor and silences the room.
 
 ## Why this is an ECS problem
 
@@ -94,10 +111,10 @@ voice crashes it; sitting silent slowly raises the urge to speak).
 | [`mind.ts`](mind.ts) | The fast turn model + mindset appraisal (the non-LLM "fast model") |
 | [`systems.ts`](systems.ts) | `ingestUser` / `broadcast` / `arbitrate` (global) + `appraise` / `speak` (persona) + the `persona` agent |
 | [`personas.ts`](personas.ts) | The three default voices (Sage, Nova, Rex) + `buildRoom()` |
-| [`audio.ts`](audio.ts) | STT/TTS resources — mock (Web Speech) and OpenAI (Whisper + TTS) |
+| [`audio.ts`](audio.ts) | STT/TTS resources — mock (Web Speech) and OpenAI (Whisper + buffered/streaming TTS) |
 | [`driver.ts`](driver.ts) | The beat loop: `userSays` / `beat` / `turns`, barge-in |
 | [`main.ts`](main.ts) | The narrated CLI demo |
-| [`server.ts`](server.ts) + [`ui/`](ui/) | The browser room: SSE server + push-to-talk page |
+| [`server.ts`](server.ts) + [`ui/`](ui/) | The browser room: rebuildable-session SSE server + push-to-talk page with a persona/audio setup panel, stop control, and factor-breakdown view |
 | [`voice-room.test.ts`](voice-room.test.ts) | Deterministic choreography + turn-model unit tests |
 
 ## Honest notes

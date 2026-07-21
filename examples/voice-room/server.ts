@@ -4,16 +4,22 @@
 //
 //   pnpm -C examples voice-room-server        # http://localhost:8787
 //
-// Audio is zero-key by default: the browser does speech recognition and speaks
-// each persona with the free Web Speech API (distinct rate/pitch per persona).
-// Set OPENAI_API_KEY (in <repo-root>/.env.local) to voice each persona with
-// gpt-4o-mini; add VOICE_ROOM_OPENAI_AUDIO=1 to also use OpenAI Whisper + TTS
-// (real mp3 audio streamed to the page) instead of the browser's built-in voices.
+// The room is a rebuildable SESSION: the page's setup panel lets you add / edit /
+// remove personas and choose the audio backend before the conversation starts,
+// then POSTs /session to rebuild the world from scratch. Endpoints:
 //
-// Pacing and barge-in are driven from the page: after each utterance the server
-// waits for a /continue (the page finished playing) before generating the next
-// beat, and a /say at any time preempts — the world only ever mutates while it is
-// idle between beats (R16).
+//   GET  /config    — current personas + audio settings + available options
+//   GET  /events     — the live SSE stream (tokens, scores, utterances, audio…)
+//   POST /session    — rebuild the room from a posted roster + audio settings
+//   POST /say         — a human turn (text); also the barge-in signal
+//   POST /say-audio   — a human turn (raw audio, transcribed via OpenAI STT)
+//   POST /stop        — halt the conversation and silence playback
+//   POST /continue    — "page finished playing that utterance; send the next beat"
+//
+// Audio backends: `web` (zero-key; the browser speaks each persona with the Web
+// Speech API) or `openai` (server-side Whisper + TTS, real audio streamed to the
+// page; needs OPENAI_API_KEY). Persona *thinking* uses gpt-4o-mini when a key is
+// present, otherwise deterministic canned lines.
 
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -21,14 +27,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openai } from '@ai-sdk/openai';
 import { fromAiSdk } from '@langecs/ai-sdk';
-import { createWorld } from '@langecs/core';
+import { createWorld, type Model, type World } from '@langecs/core';
 import { loadEnvLocal } from '../_shared/env';
-import { AudioStore, mockSTT, mockTTS, openaiSTT, openaiTTS } from './audio';
+import {
+  AudioStore,
+  mockSTT,
+  mockTTS,
+  OPENAI_TTS_MODELS,
+  OPENAI_VOICES,
+  openaiSTT,
+  openaiStreamingTTS,
+  openaiTTS,
+} from './audio';
 import { RoomDriver } from './driver';
 import { heuristicTurnModel } from './mind';
 import { cannedModel } from './offline';
-import { buildRoom, DEFAULT_PERSONAS } from './personas';
-import { STTRef, TTSRef, TurnModelRef } from './room';
+import { buildRoom, DEFAULT_PERSONAS, type PersonaSpec, type RoomHandles } from './personas';
+import { STTRef, TTSRef, TurnModelRef, type VoiceValue } from './room';
 import type { RoomEvent } from './systems';
 
 loadEnvLocal();
@@ -36,96 +51,210 @@ loadEnvLocal();
 const PORT = Number(process.env.VOICE_ROOM_PORT ?? 8787);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const apiKey = process.env.OPENAI_API_KEY;
-const useOpenAiAudio = Boolean(apiKey) && process.env.VOICE_ROOM_OPENAI_AUDIO === '1';
 
-// ---------------------------------------------------------------- the world
+// ------------------------------------------------------------ config types
+// What the page's setup panel sends. Personas here carry no resource names — the
+// server assigns and registers a model per persona on (re)build.
 
-const world = createWorld({ id: 'voice-room-web' });
-for (const spec of DEFAULT_PERSONAS) {
-  world.register(
-    spec.persona.model,
-    apiKey ? fromAiSdk(openai('gpt-4o-mini')) : cannedModel(spec.persona.name),
-  );
-}
-world.register(TurnModelRef, heuristicTurnModel({ temperature: 0.7 }));
-
-const audioStore = new AudioStore();
-if (useOpenAiAudio && apiKey) {
-  world.register(TTSRef, openaiTTS({ apiKey }));
-  world.register(STTRef, openaiSTT({ apiKey }, audioStore));
-} else {
-  world.register(TTSRef, mockTTS());
-  world.register(STTRef, mockSTT());
+interface AudioSettings {
+  backend: 'web' | 'openai';
+  openaiModel: string; // one of OPENAI_TTS_MODELS
+  streaming: boolean; // openai only: stream audio for lower latency
 }
 
-const handles = buildRoom(world);
+interface PersonaConfig {
+  name: string;
+  blurb: string;
+  systemPrompt: string;
+  interests: string[];
+  knowledge: string;
+  baseline: {
+    eagerness: number;
+    happiness: number;
+    anxiety: number;
+    anger: number;
+    stress: number;
+  };
+  voice: VoiceValue;
+}
 
-// ------------------------------------------------------------- SSE plumbing
+interface SessionConfig {
+  personas: PersonaConfig[];
+  audio: AudioSettings;
+  threshold?: number;
+  maxConsecutiveAI?: number;
+}
+
+const DEFAULT_AUDIO: AudioSettings = {
+  backend: 'web',
+  openaiModel: 'gpt-4o-mini-tts',
+  streaming: true,
+};
+
+const configFromSpec = (spec: PersonaSpec): PersonaConfig => ({
+  name: spec.persona.name,
+  blurb: spec.persona.blurb,
+  systemPrompt: spec.persona.systemPrompt,
+  interests: spec.persona.interests,
+  knowledge: spec.persona.knowledge,
+  baseline: spec.persona.baseline,
+  voice: spec.voice,
+});
+
+const specFromConfig = (c: PersonaConfig, index: number): PersonaSpec => ({
+  persona: {
+    name: c.name,
+    blurb: c.blurb,
+    systemPrompt: c.systemPrompt,
+    interests: c.interests,
+    knowledge: c.knowledge,
+    model: `model:p${index}`, // assigned + registered by the session
+    baseline: c.baseline,
+  },
+  voice: c.voice,
+});
+
+// --------------------------------------------------------------- SSE clients
 
 const clients = new Set<ServerResponse>();
-
 function broadcast(message: unknown): void {
   const line = `data: ${JSON.stringify(message)}\n\n`;
   for (const res of clients) res.write(line);
 }
 
-// The driver streams every room event (tokens, scores, utterances, lulls)
-// straight out to every connected page.
-const driver = new RoomDriver(world, handles.room.id, (e: RoomEvent) =>
-  broadcast({ t: 'event', e }),
-);
+// -------------------------------------------------------------- room session
+// One conversation: its own world, driver, and pump state. Rebuilt whenever the
+// user applies new personas / audio settings.
 
-// ------------------------------------------------------------ the pump loop
+class RoomSession {
+  readonly world: World;
+  readonly handles: RoomHandles;
+  readonly audio: AudioSettings;
+  readonly specs: PersonaSpec[];
+  readonly audioStore = new AudioStore();
+  private readonly driver: RoomDriver;
 
-let pending: { text?: string; audioToken?: string } | null = null;
-let running = false;
-let gate: (() => void) | null = null;
+  private pending: { text?: string; audioToken?: string } | null = null;
+  private running = false;
+  private stopping = false;
+  private gate: (() => void) | null = null;
 
-/** Wait until the page acknowledges it finished playing the current utterance
- *  (/continue) or the user barges in (/say). */
-function waitForContinue(): Promise<void> {
-  return new Promise((resolve) => {
-    gate = resolve;
-  });
-}
-function releaseGate(): void {
-  const g = gate;
-  gate = null;
-  g?.();
-}
+  constructor(config: SessionConfig) {
+    this.audio = config.audio;
+    this.specs = config.personas.map(specFromConfig);
+    this.world = createWorld({ id: 'voice-room-web' });
 
-async function pump(): Promise<void> {
-  if (running) return;
-  running = true;
-  try {
-    for (;;) {
-      if (pending !== null) {
-        const input = pending;
-        pending = null;
-        broadcast({ t: 'thinking' });
-        await driver.userSays(input); // world is idle here — legal (R16)
-      }
-      const beat = await driver.beat();
-      if (beat.status === 'lull') {
-        broadcast({ t: 'lull' });
-        if (pending !== null) continue; // user spoke during the beat — keep going
-        break; // quiet: wait for the next /say to restart the pump
-      }
-      broadcast({ t: 'beat', approxMs: beat.utterance?.approxMs ?? 800 });
-      await waitForContinue(); // page plays the audio, then unblocks us
+    for (const spec of this.specs) {
+      const model: Model = apiKey
+        ? fromAiSdk(openai('gpt-4o-mini'))
+        : cannedModel(spec.persona.name);
+      this.world.register(spec.persona.model, model);
     }
-  } finally {
-    running = false;
+    this.world.register(TurnModelRef, heuristicTurnModel({ temperature: 0.7 }));
+
+    if (this.audio.backend === 'openai' && apiKey) {
+      const opts = { apiKey, ttsModel: this.audio.openaiModel };
+      this.world.register(
+        TTSRef,
+        this.audio.streaming ? openaiStreamingTTS(opts) : openaiTTS(opts),
+      );
+      this.world.register(STTRef, openaiSTT({ apiKey }, this.audioStore));
+    } else {
+      this.world.register(TTSRef, mockTTS());
+      this.world.register(STTRef, mockSTT());
+    }
+
+    this.handles = buildRoom(this.world, {
+      personas: this.specs,
+      threshold: config.threshold,
+      maxConsecutiveAI: config.maxConsecutiveAI,
+    });
+    this.driver = new RoomDriver(this.world, this.handles.room.id, (e: RoomEvent) =>
+      broadcast({ t: 'event', e }),
+    );
+  }
+
+  roster() {
+    return {
+      audioMode: this.audio.backend,
+      streaming: this.audio.streaming,
+      thinking: apiKey ? 'gpt-4o-mini' : 'offline (canned lines)',
+      personas: this.handles.personas.map((p) => ({
+        id: p.id,
+        name: p.spec.persona.name,
+        blurb: p.spec.persona.blurb,
+        openaiVoice: p.spec.voice.openaiVoice,
+        web: p.spec.voice.web,
+      })),
+    };
+  }
+
+  private waitForContinue(): Promise<void> {
+    return new Promise((resolve) => {
+      this.gate = resolve;
+    });
+  }
+  private releaseGate(): void {
+    const g = this.gate;
+    this.gate = null;
+    g?.();
+  }
+
+  submitUser(input: { text?: string; audioToken?: string }): void {
+    this.stopping = false;
+    this.pending = input;
+    broadcast({ t: 'preempt' }); // pages stop any in-flight playback immediately
+    this.releaseGate();
+    void this.pump();
+  }
+
+  stop(): void {
+    this.stopping = true;
+    this.pending = null;
+    this.releaseGate();
+    broadcast({ t: 'stopped' });
+  }
+
+  continue(): void {
+    this.releaseGate();
+  }
+
+  putAudio(bytes: Uint8Array, mime: string): string {
+    return this.audioStore.put({ bytes, mime });
+  }
+
+  private async pump(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      for (;;) {
+        if (this.stopping) break;
+        if (this.pending !== null) {
+          const input = this.pending;
+          this.pending = null;
+          broadcast({ t: 'thinking' });
+          await this.driver.userSays(input); // world is idle here — legal (R16)
+        }
+        const beat = await this.driver.beat();
+        if (this.stopping) break;
+        if (beat.status === 'lull') {
+          broadcast({ t: 'lull' });
+          if (this.pending !== null) continue;
+          break;
+        }
+        broadcast({ t: 'beat', approxMs: beat.utterance?.approxMs ?? 800 });
+        await this.waitForContinue(); // page plays audio, then unblocks us
+      }
+    } finally {
+      this.running = false;
+    }
   }
 }
 
-/** A human turn (text or audio token). Preempts playback and (re)starts the pump. */
-function submitUser(input: { text?: string; audioToken?: string }): void {
-  pending = input;
-  broadcast({ t: 'preempt' }); // pages stop any in-flight playback immediately
-  releaseGate(); // let a waiting pump proceed to process the new turn
-  void pump();
-}
+let session = new RoomSession({
+  personas: DEFAULT_PERSONAS.map(configFromSpec),
+  audio: apiKey ? DEFAULT_AUDIO : { ...DEFAULT_AUDIO, backend: 'web' },
+});
 
 // --------------------------------------------------------------- http layer
 
@@ -172,17 +301,14 @@ const server = createServer(async (req, res) => {
     return serveStatic(res, 'index.html');
   if (req.method === 'GET' && path === '/app.js') return serveStatic(res, 'app.js');
 
-  if (req.method === 'GET' && path === '/roster') {
+  if (req.method === 'GET' && path === '/config') {
     return json(res, {
-      audioMode: useOpenAiAudio ? 'openai' : 'web',
-      thinking: apiKey ? 'gpt-4o-mini' : 'offline (canned lines)',
-      personas: handles.personas.map((p) => ({
-        id: p.id,
-        name: p.spec.persona.name,
-        blurb: p.spec.persona.blurb,
-        openaiVoice: p.spec.voice.openaiVoice,
-        web: p.spec.voice.web,
-      })),
+      openaiAvailable: Boolean(apiKey),
+      ttsModels: OPENAI_TTS_MODELS,
+      voices: OPENAI_VOICES,
+      audio: session.audio,
+      roster: session.roster(),
+      personas: session.specs.map(configFromSpec),
     });
   }
 
@@ -198,25 +324,42 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && path === '/session') {
+    const body = await readBody(req);
+    const config = JSON.parse(body.toString() || '{}') as SessionConfig;
+    if (!Array.isArray(config.personas) || config.personas.length === 0)
+      return json(res, { error: 'need at least one persona' }, 400);
+    if (config.personas.length > 6) return json(res, { error: 'max 6 personas' }, 400);
+    session.stop(); // halt any running conversation before swapping worlds
+    session = new RoomSession({ ...config, audio: config.audio ?? DEFAULT_AUDIO });
+    broadcast({ t: 'reset' }); // pages clear the transcript and refetch /config
+    return json(res, { ok: true });
+  }
+
   if (req.method === 'POST' && path === '/say') {
     const body = await readBody(req);
     const { text } = JSON.parse(body.toString() || '{}') as { text?: string };
-    if (text?.trim()) submitUser({ text: text.trim() });
+    if (text?.trim()) session.submitUser({ text: text.trim() });
     return json(res, { ok: true });
   }
 
   if (req.method === 'POST' && path === '/say-audio') {
     const body = await readBody(req);
-    const token = audioStore.put({
-      bytes: new Uint8Array(body),
-      mime: req.headers['content-type'] ?? 'audio/webm',
-    });
-    submitUser({ audioToken: token });
+    const token = session.putAudio(
+      new Uint8Array(body),
+      req.headers['content-type'] ?? 'audio/webm',
+    );
+    session.submitUser({ audioToken: token });
+    return json(res, { ok: true });
+  }
+
+  if (req.method === 'POST' && path === '/stop') {
+    session.stop();
     return json(res, { ok: true });
   }
 
   if (req.method === 'POST' && path === '/continue') {
-    releaseGate();
+    session.continue();
     return json(res, { ok: true });
   }
 
@@ -229,7 +372,7 @@ server.listen(PORT, () => {
     `  thinking: ${apiKey ? 'gpt-4o-mini per persona' : 'offline canned lines (set OPENAI_API_KEY for real replies)'}`,
   );
   console.log(
-    `  audio:    ${useOpenAiAudio ? 'OpenAI Whisper + TTS' : 'browser Web Speech (zero-key)'}`,
+    `  audio:    web speech by default${apiKey ? ' · OpenAI TTS available in setup' : ''}`,
   );
-  console.log(`  in the room: ${handles.personas.map((p) => p.spec.persona.name).join(', ')}\n`);
+  console.log('  edit the cast + audio in the setup panel, then push-to-talk.\n');
 });

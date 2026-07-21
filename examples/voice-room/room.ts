@@ -66,12 +66,27 @@ export interface VoiceValue {
   web: { rate: number; pitch: number; langHint?: string };
 }
 
+/** The weighted contributions behind one persona's raw turn score — surfaced so
+ *  the "wants the floor" number is fully explainable, never a black box. Each
+ *  field is the signed amount that feature added to `raw` this beat. */
+export interface TurnFactors {
+  eagerness: number; // core drive to talk (from Mindset)
+  relevance: number; // topic overlap with this persona's interests
+  arousal: number; // agitation (anger+anxiety+stress) adds urgency
+  happiness: number; // positive affect adds willingness
+  addressed: number; // bonus for being named / questioned
+  justSpoke: number; // penalty for having just held the floor
+}
+
 /** The arbiter's latest per-persona speaking probability — pure observation,
- *  rendered in the CLI and the UI so the turn decision is legible, never hidden. */
+ *  rendered in the CLI and the UI so the turn decision is legible, never hidden.
+ *  `factors`/`raw` expose exactly where `p` came from (see mind.ts). */
 export interface TurnScore {
   id: number;
   name: string;
   p: number; // probability this persona speaks next (softmax, sums to ~1)
+  raw?: number; // pre-softmax weighted score
+  factors?: TurnFactors; // the per-feature contributions to `raw`
 }
 
 // ----------------------------------------------------------- ROOM components
@@ -181,6 +196,14 @@ export interface SpeechToText {
 }
 export interface TextToSpeech {
   synthesize(text: string, voice: VoiceValue): Promise<SpeechClip>;
+  /** Optional low-latency path: emit base64 audio chunks as they arrive (for
+   *  progressive playback), resolving to the full clip. When present, `speak`
+   *  prefers it — mirroring the model's token-streaming path. */
+  stream?(
+    text: string,
+    voice: VoiceValue,
+    onChunk: (base64Chunk: string) => void,
+  ): Promise<SpeechClip>;
 }
 
 export const STTRef = defineResource<SpeechToText>('audio:stt');

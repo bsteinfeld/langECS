@@ -50,6 +50,7 @@ import {
   Transcript,
   TTSRef,
   TurnModelRef,
+  type TurnScore,
   TurnScores,
   type Utterance,
   Voice,
@@ -62,7 +63,8 @@ import {
 export type RoomEvent =
   | { kind: 'user'; text: string }
   | { kind: 'token'; who: string; whoId: number; text: string }
-  | { kind: 'scores'; scores: { id: number; name: string; p: number }[]; pickId: number | null }
+  | { kind: 'scores'; scores: TurnScore[]; pickId: number | null }
+  | { kind: 'audio-chunk'; whoId: number; base64: string }
   | {
       kind: 'utterance';
       who: string;
@@ -71,6 +73,7 @@ export type RoomEvent =
       voice: string;
       audioBase64?: string;
       approxMs: number;
+      streamed: boolean; // audio-chunk events preceded this (use MSE playback)
     }
   | { kind: 'lull' };
 
@@ -227,7 +230,18 @@ const speakSystem = defineSystem({
     }
     const text = result.message.content.trim();
 
-    const clip = await ctx.resource(TTSRef).synthesize(text, voice);
+    // Synthesize the voice. If the TTS resource supports streaming, prefer it and
+    // emit audio chunks as they arrive (mirrors the model's token streaming) so
+    // the page can start playing before synthesis finishes.
+    const tts = ctx.resource(TTSRef);
+    const streamFn = tts.stream?.bind(tts);
+    const streamed = streamFn !== undefined;
+    const clip = streamFn
+      ? await streamFn(text, voice, (base64) =>
+          ctx.emit({ kind: 'audio-chunk', whoId: e.id, base64 } satisfies RoomEvent),
+        )
+      : await tts.synthesize(text, voice);
+
     const utterance: Utterance = { speaker: identity.name, speakerId: e.id, text, step: ctx.step };
     ctx.write(e.get(RoomRef), Transcript, [utterance], 'add');
     e.remove(Speaking);
@@ -240,6 +254,7 @@ const speakSystem = defineSystem({
       voice: clip.voice,
       audioBase64: clip.audioBase64,
       approxMs: clip.approxMs,
+      streamed,
     } satisfies RoomEvent);
   },
 });

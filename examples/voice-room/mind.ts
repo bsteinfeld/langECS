@@ -14,7 +14,14 @@
 // helper. Determinism (no Math.random) keeps the choreography test stable; the
 // live server can opt into a little jitter via `TurnModelOptions.temperature`.
 
-import type { MindsetValue, TurnModel, TurnModelInput, TurnScore, Utterance } from './room';
+import type {
+  MindsetValue,
+  TurnFactors,
+  TurnModel,
+  TurnModelInput,
+  TurnScore,
+  Utterance,
+} from './room';
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 const lower = (s: string): string => s.toLowerCase();
@@ -103,29 +110,45 @@ export function heuristicTurnModel(options: TurnModelOptions = {}): TurnModel {
   const temperature = options.temperature ?? 0.6;
   return {
     score(input: TurnModelInput): TurnScore[] {
-      const raw = input.candidates.map((c) => {
+      const scored = input.candidates.map((c) => {
         const m = c.mindset;
         const rel = relevance(input.last?.text ?? '', c.interests);
         const addressed = directlyAddressed(c.name, input.last);
         const justSpoke = input.last !== null && input.last.speaker === c.name;
         const arousal = (m.anger + m.anxiety + m.stress) / 3;
 
-        let s =
-          m.eagerness * 1.0 + // core drive to talk
-          rel * 0.8 + // on-topic for them
-          arousal * 0.4 + // agitation adds urgency...
-          m.happiness * 0.2; // ...but so does being into it
-        if (addressed) s += 1.2; // named / questioned -> strong pull
-        if (justSpoke) s -= 1.5; // don't immediately re-take the floor
-        return { id: c.id, name: c.name, s };
+        // Each factor is the signed amount it contributes to `raw`, so the UI can
+        // show exactly where the "wants the floor" number comes from.
+        const factors: TurnFactors = {
+          eagerness: m.eagerness * 1.0, // core drive to talk
+          relevance: rel * 0.8, // on-topic for them
+          arousal: arousal * 0.4, // agitation adds urgency...
+          happiness: m.happiness * 0.2, // ...but so does being into it
+          addressed: addressed ? 1.2 : 0, // named / questioned -> strong pull
+          justSpoke: justSpoke ? -1.5 : 0, // don't immediately re-take the floor
+        };
+        const raw =
+          factors.eagerness +
+          factors.relevance +
+          factors.arousal +
+          factors.happiness +
+          factors.addressed +
+          factors.justSpoke;
+        return { id: c.id, name: c.name, raw, factors };
       });
 
       // Softmax over the raw scores.
       const t = Math.max(temperature, 0.05);
-      const max = Math.max(...raw.map((r) => r.s));
-      const exps = raw.map((r) => Math.exp((r.s - max) / t));
+      const max = Math.max(...scored.map((r) => r.raw));
+      const exps = scored.map((r) => Math.exp((r.raw - max) / t));
       const sum = exps.reduce((a, b) => a + b, 0) || 1;
-      return raw.map((r, i) => ({ id: r.id, name: r.name, p: (exps[i] as number) / sum }));
+      return scored.map((r, i) => ({
+        id: r.id,
+        name: r.name,
+        p: (exps[i] as number) / sum,
+        raw: r.raw,
+        factors: r.factors,
+      }));
     },
   };
 }
