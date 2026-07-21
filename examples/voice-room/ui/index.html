@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LangECS · Voice Room</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --panel-2: #1c232d;
+        --line: #263041;
+        --text: #e6edf3;
+        --muted: #8b98a9;
+        --accent: #6ea8fe;
+        --user: #3fb950;
+        --warn: #ff6b6b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: radial-gradient(1200px 600px at 50% -10%, #1a2230, var(--bg));
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        padding: 16px 24px; border-bottom: 1px solid var(--line);
+      }
+      header h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+      header .sub { color: var(--muted); font-size: 13px; }
+      header .spacer { flex: 1; }
+      .btn {
+        padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line);
+        background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px;
+      }
+      .btn:hover { border-color: var(--accent); }
+      .btn.primary { background: var(--accent); color: #08111f; font-weight: 650; border-color: var(--accent); }
+      .btn.warn { color: var(--warn); }
+      .wrap { max-width: 900px; margin: 0 auto; padding: 20px 16px 170px; }
+
+      /* setup panel */
+      .setup { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 20px; }
+      .setup h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+      .setup.collapsed .setup-body { display: none; }
+      .audio-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+      .audio-row label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+      select, input[type="text"], input[type="number"], textarea {
+        background: #0c1017; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+      }
+      textarea { width: 100%; resize: vertical; min-height: 44px; }
+      .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+      .pedit { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+      .pedit .field { margin-bottom: 8px; }
+      .pedit .field > span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+      .pedit input[type="text"], .pedit textarea, .pedit select { width: 100%; }
+      .pedit .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+      .sliders label { font-size: 11px; color: var(--muted); }
+      .sliders input[type="range"] { width: 100%; }
+      .pedit .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+      .pedit .head b { font-size: 14px; }
+      .setup-actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
+      .note { color: var(--muted); font-size: 12px; }
+
+      /* stage */
+      .stage { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+      .persona {
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--line); border-radius: 14px; padding: 14px; cursor: pointer;
+        transition: box-shadow .2s, border-color .2s, transform .2s;
+      }
+      .persona.speaking { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 8px 30px -8px var(--accent); transform: translateY(-2px); }
+      .persona .top { display: flex; align-items: center; gap: 10px; }
+      .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #0e1116; flex: none; }
+      .persona .name { font-weight: 650; }
+      .persona .blurb { color: var(--muted); font-size: 12px; margin-top: 2px; min-height: 30px; }
+      .meter { height: 6px; border-radius: 4px; background: #0c1017; overflow: hidden; margin-top: 8px; }
+      .meter > span { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .35s ease; }
+      .meter-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px; }
+      .meter-label .why { color: var(--accent); }
+      /* factor breakdown */
+      .factors { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; display: none; }
+      .persona.open .factors { display: block; }
+      .frow { display: grid; grid-template-columns: 74px 1fr 42px; gap: 6px; align-items: center; font-size: 11px; margin: 3px 0; }
+      .fbar { height: 8px; background: #0c1017; border-radius: 3px; position: relative; overflow: hidden; }
+      .fbar > i { position: absolute; top: 0; bottom: 0; left: 50%; }
+      .fbar > i.pos { background: var(--user); }
+      .fbar > i.neg { background: var(--warn); }
+      .frow .fv { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+      .fsum { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+      /* transcript */
+      .log { display: flex; flex-direction: column; gap: 10px; }
+      .msg { max-width: 82%; padding: 10px 13px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+      .msg .who { font-size: 12px; font-weight: 650; margin-bottom: 2px; }
+      .msg.user { align-self: flex-end; background: #17301f; border-color: #245234; }
+      .msg.user .who { color: var(--user); }
+      .status { text-align: center; color: var(--muted); font-size: 13px; padding: 8px; font-style: italic; }
+
+      .dock { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: linear-gradient(180deg, transparent, var(--bg) 30%); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+      .talkrow { display: flex; gap: 8px; width: 100%; max-width: 560px; }
+      .talk { flex: 1; padding: 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--accent); color: #08111f; font-size: 16px; font-weight: 700; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; transition: transform .08s, background .15s; }
+      .talk:active, .talk.recording { transform: scale(.99); background: var(--warn); color: #fff; }
+      .talk.recording { box-shadow: 0 0 0 4px rgba(255,107,107,.25); }
+      .stopbtn { padding: 0 18px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel-2); color: var(--warn); font-weight: 650; cursor: pointer; }
+      .row { display: flex; gap: 8px; width: 100%; max-width: 560px; }
+      .row input { flex: 1; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-size: 14px; }
+      .hint { color: var(--muted); font-size: 12px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>LangECS · Voice Room</h1>
+      <span class="sub" id="status-line">connecting…</span>
+      <span class="spacer"></span>
+      <button class="btn" id="toggle-setup">⚙ Setup</button>
+    </header>
+    <div class="wrap">
+      <div class="setup" id="setup">
+        <h2>Setup — edit the cast &amp; audio, then start</h2>
+        <div class="setup-body">
+          <div class="audio-row" id="audio-row">
+            <label>Voices:
+              <select id="audio-backend">
+                <option value="web">Browser (Web Speech, no key)</option>
+                <option value="openai">OpenAI TTS</option>
+              </select>
+            </label>
+            <label>Model:
+              <select id="audio-model"></select>
+            </label>
+            <label><input type="checkbox" id="audio-streaming" /> stream audio (lower latency)</label>
+            <span class="note" id="audio-note"></span>
+          </div>
+          <div class="pgrid" id="persona-editor"></div>
+          <div class="setup-actions">
+            <button class="btn" id="add-persona">+ Add persona</button>
+            <button class="btn primary" id="apply-setup">Start / Apply</button>
+            <span class="note" id="setup-note"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage" id="stage"></div>
+      <div class="log" id="log"></div>
+      <div class="status" id="room-status"></div>
+    </div>
+
+    <div class="dock">
+      <div class="talkrow">
+        <div class="talk" id="talk">🎙 Hold to talk (or type below)</div>
+        <button class="stopbtn" id="stop-btn" title="Stop the conversation">⏹ Stop</button>
+      </div>
+      <div class="row">
+        <input id="text-input" placeholder="…or type a message and press Enter" autocomplete="off" />
+        <button class="btn" id="send-btn">Send</button>
+      </div>
+      <div class="hint" id="hint"></div>
+    </div>
+
+    <template id="persona-template">
+      <div class="pedit">
+        <div class="head"><b class="pname">Persona</b><button class="btn warn remove">✕</button></div>
+        <div class="field"><span>Name</span><input type="text" data-f="name" /></div>
+        <div class="field"><span>Blurb (shown on the card)</span><input type="text" data-f="blurb" /></div>
+        <div class="field"><span>System prompt (who they are)</span><textarea data-f="systemPrompt"></textarea></div>
+        <div class="field"><span>Interests (comma-separated — raises eagerness on-topic)</span><input type="text" data-f="interests" /></div>
+        <div class="field"><span>Private knowledge (only they know)</span><textarea data-f="knowledge"></textarea></div>
+        <div class="field two">
+          <div><span>OpenAI voice</span><select data-f="voice"></select></div>
+          <div><span>Web rate / pitch</span>
+            <div class="two"><input type="number" step="0.05" min="0.5" max="2" data-f="rate" /><input type="number" step="0.05" min="0.5" max="2" data-f="pitch" /></div>
+          </div>
+        </div>
+        <div class="field"><span>Baseline mood</span>
+          <div class="sliders">
+            <label>eager <input type="range" min="0" max="1" step="0.05" data-m="eagerness" /></label>
+            <label>happy <input type="range" min="0" max="1" step="0.05" data-m="happiness" /></label>
+            <label>anxious <input type="range" min="0" max="1" step="0.05" data-m="anxiety" /></label>
+            <label>angry <input type="range" min="0" max="1" step="0.05" data-m="anger" /></label>
+            <label>stress <input type="range" min="0" max="1" step="0.05" data-m="stress" /></label>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
