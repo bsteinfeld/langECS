@@ -18,14 +18,14 @@ import { fromAiSdk } from '@langecs/ai-sdk';
 import { createWorld } from '@langecs/core';
 import { loadEnvLocal } from '../_shared/env';
 import { mockSTT, mockTTS } from './audio';
+import type { Beat } from './driver';
 import { RoomDriver } from './driver';
 import { heuristicTurnModel } from './mind';
 import { cannedModel } from './offline';
+import type { RoomHandles } from './personas';
 import { buildRoom, DEFAULT_PERSONAS } from './personas';
 import { Mindset, type MindsetValue, Persona, STTRef, TTSRef, TurnModelRef } from './room';
-import type { Beat } from './driver';
 import type { RoomEvent } from './systems';
-import type { RoomHandles } from './personas';
 
 loadEnvLocal();
 const live = Boolean(process.env.OPENAI_API_KEY);
@@ -50,7 +50,9 @@ const bar = (p: number): string => {
 };
 
 function renderScores(beat: Beat): void {
-  const scores = beat.events.find((e): e is Extract<RoomEvent, { kind: 'scores' }> => e.kind === 'scores');
+  const scores = beat.events.find(
+    (e): e is Extract<RoomEvent, { kind: 'scores' }> => e.kind === 'scores',
+  );
   if (!scores) return;
   console.log('   turn model → who speaks next:');
   for (const s of [...scores.scores].sort((a, b) => b.p - a.p)) {
@@ -95,7 +97,8 @@ async function humanTurn(text: string): Promise<void> {
 async function main(handlesRef: RoomHandles): Promise<void> {
   console.log(`voice-room — ${live ? 'live (gpt-4o-mini per persona)' : 'offline (canned lines)'}`);
   console.log('in the room:');
-  for (const p of handlesRef.personas) console.log(`   • ${p.spec.persona.name} — ${p.spec.persona.blurb}`);
+  for (const p of handlesRef.personas)
+    console.log(`   • ${p.spec.persona.name} — ${p.spec.persona.blurb}`);
 
   await humanTurn('Hey everyone — should we trust AI to run important things?');
   // A barge-in: the user changes the subject; the floor is preempted and the

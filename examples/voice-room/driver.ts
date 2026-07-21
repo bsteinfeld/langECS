@@ -69,7 +69,9 @@ export class RoomDriver {
     const run = this.world.run();
     const events = await collect(run, this.onEvent);
     const result = await run;
-    const utterance = events.find((e): e is Extract<RoomEvent, { kind: 'utterance' }> => e.kind === 'utterance');
+    const utterance = events.find(
+      (e): e is Extract<RoomEvent, { kind: 'utterance' }> => e.kind === 'utterance',
+    );
     return {
       status: utterance ? 'spoke' : 'lull',
       utterance,

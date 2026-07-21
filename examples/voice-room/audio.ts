@@ -91,11 +91,22 @@ export function openaiTTS(options: OpenAIAudioOptions): TextToSpeech {
           Authorization: `Bearer ${options.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ model, voice: voice.openaiVoice, input: text, response_format: 'mp3' }),
+        body: JSON.stringify({
+          model,
+          voice: voice.openaiVoice,
+          input: text,
+          response_format: 'mp3',
+        }),
       });
       if (!res.ok) throw new Error(`OpenAI TTS ${res.status}: ${await res.text()}`);
       const audioBase64 = Buffer.from(await res.arrayBuffer()).toString('base64');
-      return { format: 'mp3', voice: voice.openaiVoice, text, audioBase64, approxMs: estimateMs(text) };
+      return {
+        format: 'mp3',
+        voice: voice.openaiVoice,
+        text,
+        audioBase64,
+        approxMs: estimateMs(text),
+      };
     },
   };
 }

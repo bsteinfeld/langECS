@@ -23,7 +23,9 @@
     "research-team": "tsx research-team/main.ts",
     "devtools-demo": "tsx devtools-demo/main.ts",
     "context-window": "tsx context-window/main.ts",
-    "rag-qa": "tsx rag-qa/main.ts"
+    "rag-qa": "tsx rag-qa/main.ts",
+    "voice-room": "tsx voice-room/main.ts",
+    "voice-room-server": "tsx voice-room/server.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",

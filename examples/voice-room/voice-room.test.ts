@@ -12,16 +12,16 @@
 import { createWorld, scriptedModel } from '@langecs/core';
 import { expect, test } from 'vitest';
 import { mockSTT, mockTTS } from './audio';
+import { RoomDriver } from './driver';
 import { appraise, heuristicTurnModel, pickSpeaker } from './mind';
 import { buildRoom } from './personas';
-import { RoomDriver } from './driver';
 import {
   Floor,
   type MindsetValue,
-  type TurnModel,
-  Transcript,
   STTRef,
+  Transcript,
   TTSRef,
+  type TurnModel,
   TurnModelRef,
 } from './room';
 
@@ -32,7 +32,11 @@ function scriptedTurns(order: (number | null)[]): TurnModel {
   return {
     score(input) {
       const pick = order[i++] ?? null;
-      return input.candidates.map((c) => ({ id: c.id, name: c.name, p: c.id === pick ? 0.9 : 0.05 }));
+      return input.candidates.map((c) => ({
+        id: c.id,
+        name: c.name,
+        p: c.id === pick ? 0.9 : 0.05,
+      }));
     },
   };
 }
@@ -144,7 +148,12 @@ test('the fast turn model: interest and direct address raise speaking probabilit
   };
   const scores = model.score({
     step: 5,
-    last: { speaker: 'user', speakerId: null, text: 'Nova, tell me about rockets and space!', step: 4 },
+    last: {
+      speaker: 'user',
+      speakerId: null,
+      text: 'Nova, tell me about rockets and space!',
+      step: 4,
+    },
     candidates: [
       { id: 2, name: 'Sage', interests: ['ethics', 'meaning'], mindset: base },
       { id: 3, name: 'Nova', interests: ['space', 'rockets', 'technology'], mindset: base },

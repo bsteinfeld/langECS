@@ -23,7 +23,14 @@
 // gate, so a full `world.run()` yields exactly one utterance — leaving room to
 // play its audio and let the user barge in between turns.
 
-import { type AgentDef, defineAgent, defineSystem, type Model, type SystemCtx, type World } from '@langecs/core';
+import {
+  type AgentDef,
+  defineAgent,
+  defineSystem,
+  type Model,
+  type SystemCtx,
+  type World,
+} from '@langecs/core';
 import { appraise, pickSpeaker } from './mind';
 import {
   AppraisalRound,

@@ -9,10 +9,10 @@ import type { EntityHandle, World } from '@langecs/core';
 import {
   Appraised,
   Floor,
-  type MindsetValue,
   Mindset,
-  type PersonaValue,
+  type MindsetValue,
   Persona,
+  type PersonaValue,
   RoomConfig,
   RoomRef,
   Transcript,
@@ -27,9 +27,11 @@ export interface PersonaSpec {
   voice: VoiceValue;
 }
 
-const mindset = (
-  baseline: PersonaValue['baseline'],
-): MindsetValue => ({ ...baseline, lastSpokeStep: -1, wantsToSay: '' });
+const mindset = (baseline: PersonaValue['baseline']): MindsetValue => ({
+  ...baseline,
+  lastSpokeStep: -1,
+  wantsToSay: '',
+});
 
 /** The three default voices in the room — deliberately different tempers so the
  *  turn-taking is visibly driven by mindset, not round-robin. */

@@ -79,7 +79,10 @@ export interface TurnScore {
 /** The shared conversation. Append reducer: the user and a speaking persona can
  *  land lines in the same barrier without conflicting (R30). Every append is
  *  foreign dirt for `broadcast`, which is what drives the next beat. */
-export const Transcript = defineComponent<Utterance[]>({ name: 'room:Transcript', reducer: append });
+export const Transcript = defineComponent<Utterance[]>({
+  name: 'room:Transcript',
+  reducer: append,
+});
 
 /** Who is holding the floor right now (persona entity id), or null between turns
  *  / after the user preempts. `since` is the step the floor was taken. */
