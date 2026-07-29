@@ -33,11 +33,15 @@ export {
   CancelledError,
   DeserializeError,
   DuplicateComponentError,
+  DuplicateMigrationError,
   DuplicateSystemError,
+  FenceError,
   LangECSError,
   MissingResourceError,
+  RecipeVersionError,
   type SerializedError,
   SnapshotVersionError,
+  StaleSnapshotError,
   SystemTimeoutError,
   UnknownComponentError,
   UnknownEntityError,
@@ -80,7 +84,14 @@ export { MemoryAdapter, type PersistenceAdapter } from './persistence';
 // `ctx.resource<Model>('model:main')` with
 // `const MainModel = defineResource<Model>('model:main')` + `ctx.resource(MainModel)`.
 export { defineResource, type ResourceRef } from './resource';
-export type { PendingPair, Snapshot, SnapshotEntity } from './snapshot';
+export type {
+  LoadCheck,
+  LoadReport,
+  Migration,
+  PendingPair,
+  Snapshot,
+  SnapshotEntity,
+} from './snapshot';
 export {
   type ComponentValue,
   defineSystem,

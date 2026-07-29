@@ -15,17 +15,39 @@ export interface FsAdapterOptions {
   dir: string;
 }
 
-/** `PersistenceAdapter` with `history`/`loadStep` guaranteed (like core's `MemoryAdapter`). */
+/** `PersistenceAdapter` with `history`/`loadStep`/`fence` guaranteed (like core's `MemoryAdapter`). */
 export interface FsAdapter extends PersistenceAdapter {
   save(snapshot: Snapshot): Promise<void>;
   load(worldId: string): Promise<Snapshot | null>;
   history(worldId: string): Promise<{ step: number; savedAt: number }[]>;
   loadStep(worldId: string, step: number): Promise<Snapshot | null>;
+  fence(worldId: string, step: number): Promise<boolean>;
 }
 
 const STEP_FILE = /^step-(\d+)\.json$/;
+const FENCE_FILE = /^fence-(\d+)\.lock$/;
 
 const stepFileName = (step: number): string => `step-${String(step).padStart(6, '0')}.json`;
+const fenceFileName = (step: number): string => `fence-${String(step).padStart(6, '0')}.lock`;
+
+/** Highest step any writer has claimed in `worldDir`, or undefined if none (R57). */
+async function highestFence(worldDir: string): Promise<number | undefined> {
+  let names: string[];
+  try {
+    names = await readdir(worldDir);
+  } catch (err) {
+    if (isENOENT(err)) return undefined;
+    throw err;
+  }
+  let highest: number | undefined;
+  for (const name of names) {
+    const match = FENCE_FILE.exec(name);
+    if (match?.[1] === undefined) continue;
+    const step = Number.parseInt(match[1], 10);
+    if (highest === undefined || step > highest) highest = step;
+  }
+  return highest;
+}
 
 const isENOENT = (err: unknown): boolean =>
   err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
@@ -113,6 +135,38 @@ export function fsAdapter(options: FsAdapterOptions): FsAdapter {
       const dir = worldDir(worldId);
       const match = (await listStepFiles(dir)).find((s) => s.step === step);
       return match ? readSnapshot(join(dir, match.name)) : null;
+    },
+
+    /**
+     * Monotonic fence via exclusive create (R57).
+     *
+     * `wx` fails with EEXIST if the file is already there, and that check-and-
+     * create is atomic in the kernel — so two workers racing to claim the same
+     * step cannot both win, even across processes. A read-then-write would
+     * reintroduce exactly the race this exists to close.
+     *
+     * One lock file per step (`fence-NNNNNN.lock`) rather than one mutable file,
+     * because "claim step N" has to refuse N and everything below it: the
+     * presence of any lock at or above N is the refusal, and checking that needs
+     * no locking of its own.
+     */
+    async fence(worldId: string, step: number): Promise<boolean> {
+      const dir = worldDir(worldId);
+      await mkdir(dir, { recursive: true });
+      // Someone already owns this step or a later one: this world has lost.
+      const highest = await highestFence(dir);
+      if (highest !== undefined && step <= highest) return false;
+      try {
+        await writeFile(join(dir, fenceFileName(step)), String(Date.now()), {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+        return true;
+      } catch (err) {
+        // EEXIST: another writer claimed this exact step in between.
+        if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+        throw err;
+      }
     },
   };
 }

@@ -136,3 +136,60 @@ test('load falls back to the newest step file when latest.json is missing', asyn
   expect(snap?.step).toBe(2);
   expect(snap?.worldId).toBe('fb');
 });
+
+test('fence grants a step once and refuses that step or lower (R57)', async () => {
+  const dir = await makeDir();
+  const adapter = fsAdapter({ dir });
+
+  expect(await adapter.fence('fenced', 3)).toBe(true);
+  // The same step twice is a refusal: two workers resuming one snapshot both
+  // want to write the same next step, and only one may.
+  expect(await adapter.fence('fenced', 3)).toBe(false);
+  // Anything at or below a claimed step is stale.
+  expect(await adapter.fence('fenced', 2)).toBe(false);
+  // Forward progress by the winner is still allowed.
+  expect(await adapter.fence('fenced', 4)).toBe(true);
+  // Fencing is per world id.
+  expect(await adapter.fence('other', 1)).toBe(true);
+});
+
+test('fence resolves a concurrent race to exactly one winner (R57)', async () => {
+  const dir = await makeDir();
+  const adapter = fsAdapter({ dir });
+
+  // The check-and-create is atomic in the kernel (`wx`), so simultaneous claims
+  // cannot both succeed — this is the property a durable adapter has to provide
+  // and that a read-then-write implementation would silently lose.
+  const results = await Promise.all(Array.from({ length: 8 }, () => adapter.fence('stampede', 1)));
+  expect(results.filter(Boolean)).toHaveLength(1);
+});
+
+test('a fenced world stops rather than diverge, and the winner keeps its history', async () => {
+  const dir = await makeDir();
+  const adapter = fsAdapter({ dir });
+
+  const seed = createWorld({ id: 'race', persistence: adapter });
+  seed.use(echo);
+  seed.spawn(Input(['seed']));
+  await seed.run();
+  const shared = await adapter.load('race');
+  if (shared === null) throw new Error('expected a seeded snapshot');
+
+  const worker = () => {
+    const w = createWorld({ id: 'race', persistence: adapter, fence: true });
+    w.use(echo);
+    w.load(shared);
+    w.query(Input)[0]?.add(Input, ['contended']);
+    return w;
+  };
+  const [a, b] = await Promise.allSettled([worker().run(), worker().run()]);
+
+  expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected']);
+  const loser = (a.status === 'rejected' ? a : b) as PromiseRejectedResult;
+  expect((loser.reason as Error).name).toBe('FenceError');
+
+  // Exactly one snapshot exists for the contended step — no interleaved timeline
+  // on disk, which is the whole point.
+  const history = await adapter.history('race');
+  expect(history.filter((h) => h.step === shared.step + 1)).toHaveLength(1);
+});
