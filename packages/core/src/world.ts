@@ -2,7 +2,7 @@ import type { AgentDef } from './agent';
 import { isAgentDef } from './agent';
 import type { CancellationRecord, ErrorRecord, InterruptRecord } from './builtins';
 import { AwaitingHuman, Cancelled, HumanResponse, SystemError } from './builtins';
-import { anySignal } from './cancel';
+import { abortReason, anySignal } from './cancel';
 import type { ComponentInit, ComponentType, QueryTerm } from './component';
 import { getComponentByName, isComponentType } from './component';
 import {
@@ -135,6 +135,12 @@ export interface RunningPair {
   elapsedMs: number;
   /** Effective timeout for this pair, when one applies (R52). */
   timeoutMs?: number;
+  /**
+   * True when the barrier stopped waiting for this pair (R52) but its `run` is
+   * still executing. Kept visible on purpose: a system hung badly enough to be
+   * abandoned is exactly what an operator is looking for here.
+   */
+  abandoned?: boolean;
 }
 
 export interface World {
@@ -419,6 +425,12 @@ interface PairExec {
   timeoutController?: AbortController;
   /** Effective timeout, resolved from the system then the world default (R52). */
   timeoutMs?: number;
+  /** This pair's `ctx.signal` — the attribution key for a cancellation-caused failure. */
+  signal?: AbortSignal;
+  /** True iff this pair's own signal aborted (R51). */
+  signalAborted(): boolean;
+  /** The value this pair's signal was aborted with, for identity comparison. */
+  abortValue(): unknown;
 }
 
 interface AttributedChange {
@@ -529,7 +541,14 @@ class WorldImpl implements World {
   /** In-flight pairs for `runningPairs()` (R53), keyed by pair id. */
   private readonly inFlight = new Map<
     string,
-    { system: string; entity: number; step: number; startedAt: number; timeoutMs?: number }
+    {
+      system: string;
+      entity: number;
+      step: number;
+      startedAt: number;
+      timeoutMs?: number;
+      abandoned?: boolean;
+    }
   >();
 
   constructor(opts?: WorldOptions) {
@@ -1014,13 +1033,13 @@ class WorldImpl implements World {
     this.driveLoop(emit, opts?.limit ?? this.recursionLimit, runId).then(
       (result) => {
         this.runInFlight = false;
-        this.inFlight.clear();
+        this.forgetSettledPairs();
         emit({ type: 'run:end', status: result.status, steps: result.steps });
         stream.resolve(result);
       },
       (err) => {
         this.runInFlight = false;
-        this.inFlight.clear();
+        this.forgetSettledPairs();
         // A rejected run emits no run:end (R40); observers get the
         // observer-only run:reject instead (R45) so they can close out.
         this.notifyEvent({ type: 'run:reject', error: serializeError(err) }, runId);
@@ -1097,6 +1116,18 @@ class WorldImpl implements World {
     return changes;
   }
 
+  /**
+   * Drops in-flight bookkeeping at run end, except for pairs the barrier
+   * abandoned (R52) — those are genuinely still executing, and hiding them
+   * defeats the one diagnostic `runningPairs()` exists for. Their own settlement
+   * removes them.
+   */
+  private forgetSettledPairs(): void {
+    for (const [key, info] of [...this.inFlight]) {
+      if (info.abandoned !== true) this.inFlight.delete(key);
+    }
+  }
+
   runningPairs(): RunningPair[] {
     const at = now();
     return [...this.inFlight.values()].map((info) => {
@@ -1107,6 +1138,7 @@ class WorldImpl implements World {
         elapsedMs: at - info.startedAt,
       };
       if (info.timeoutMs !== undefined) pair.timeoutMs = info.timeoutMs;
+      if (info.abandoned === true) pair.abandoned = true;
       return pair;
     });
   }
@@ -1131,6 +1163,10 @@ class WorldImpl implements World {
       const cancellation = this.pendingCancel;
       if (cancellation !== undefined) {
         this.pendingCancel = undefined;
+        // The step the stamp actually lands at, not the one `cancel()` was called
+        // during — those differ whenever a step was in flight, and the record
+        // documents itself as the boundary it landed at.
+        cancellation.step = stepNo;
         const changes = this.stampCancelled(cancellation, 'engine');
         const applied = changes.map((c) => c.record);
         this.pushTrace({
@@ -1144,6 +1180,17 @@ class WorldImpl implements World {
           durationMs: 0,
         });
         emit({ type: 'step:applied', step: stepNo, changes: applied, spawned: [], despawned: [] });
+        // This boundary commits state, so it advances the step like any other
+        // commit. Leaving the counter alone (the original choice, by analogy with
+        // a fully-vetoed iteration) was wrong three ways: adapters key snapshots
+        // by step, so the boundary OVERWROTE the pre-cancel step-N snapshot and
+        // made the uncancelled world unrecoverable by time travel; `step:applied`
+        // advertised a step that never existed, which R45 calls the truthful
+        // label; and it left the save keyed on a revision while the fence was
+        // keyed on the step, so a fenced world refused its own boundary. A veto
+        // commits nothing, which is why that precedent does not apply here.
+        this.stepCount += 1;
+        this.markChanged();
         break;
       }
 
@@ -1282,21 +1329,68 @@ class WorldImpl implements World {
     // when there were no entities to stamp. It has to come first — otherwise a
     // cancelled run whose aborted calls also left errors behind would report
     // `'error'`, and the caller could not tell "I stopped this" from "it broke".
-    const status: RunStatus =
-      this.cancelSeen || this.hasCancelled()
-        ? 'cancelled'
-        : limitHit
-          ? 'limit'
-          : steps === 0
-            ? 'idle'
-            : this.collectErrors().length > 0
-              ? 'error'
-              : this.pending().length > 0
-                ? 'pending'
-                : 'done';
-    // Run end always persists, at every cadence, so a quiesced world is never
-    // left unpersisted (R58).
+    // A cancel landing during the run-end save must not vanish. `world.running`
+    // is still true there, so `cancel()` takes the mid-run branch and sets
+    // `pendingCancel` — which nothing read, because status was computed first and
+    // the next run resets it. It returned void and left no trace, so a UI gating
+    // its Cancel button on `world.running` showed a live control that did nothing.
+    //
+    // Run end always persists whatever changed since the last save (R58).
     await this.persist();
+    if (this.pendingCancel !== undefined) {
+      const late = this.pendingCancel;
+      this.pendingCancel = undefined;
+      late.step = this.stepCount + 1;
+      const changes = this.stampCancelled(late, 'engine');
+      const applied = changes.map((c) => c.record);
+      this.pushTrace({
+        step: this.stepCount + 1,
+        scheduled: [],
+        vetoed: [],
+        runs: [],
+        applied,
+        spawned: [],
+        despawned: [],
+        durationMs: 0,
+      });
+      emit({
+        type: 'step:applied',
+        step: this.stepCount + 1,
+        changes: applied,
+        spawned: [],
+        despawned: [],
+      });
+      this.stepCount += 1;
+      this.markChanged();
+      await this.persist();
+    }
+
+    // Status precedence (R28 amended). `'cancelled'` is scoped to THIS run, plus
+    // the zero-step case so a world reloaded already-cancelled still reports it.
+    //
+    // It used to be `cancelSeen || hasCancelled()`, and that made the status
+    // sticky world-wide and permanent: unlike `SystemError` (auto-cleared by R32)
+    // and `AwaitingHuman` (removed by `resume`), `Cancelled` has no engine
+    // clearing path, so ONE stale carrier on an unrelated entity masked
+    // `'error'`, `'pending'` and `'limit'` forever. It also made a multi-agent
+    // world un-resumable one agent at a time: un-cancelling one entity left the
+    // run reporting `'cancelled'` while that agent answered perfectly, and
+    // stdlib's `ask()` then threw "no answer is coming" about a reply already in
+    // `Messages`. Requiring zero steps keeps the durability property without
+    // hiding work that actually happened.
+    const status: RunStatus = this.cancelSeen
+      ? 'cancelled'
+      : limitHit
+        ? 'limit'
+        : steps === 0
+          ? this.hasCancelled()
+            ? 'cancelled'
+            : 'idle'
+          : this.collectErrors().length > 0
+            ? 'error'
+            : this.pending().length > 0
+              ? 'pending'
+              : 'done';
     return { status, steps, pending: this.pending(), errors: this.collectErrors() };
   }
 
@@ -1460,7 +1554,13 @@ class WorldImpl implements World {
         // (R50): the run is being abandoned deliberately, and an ErrorRecord
         // would invite the stdlib `retry` system to re-arm the very work that
         // was just cancelled.
-        if (this.runCancel?.signal.aborted === true && exec.timedOut !== true) {
+        //
+        // Attributed to THIS pair by error identity, not to the run. A run-wide
+        // `runCancel.aborted` test swallowed any failure that happened to land
+        // after the cancel — a sibling's genuine TypeError became invisible with
+        // no record anywhere durable, and the canonical
+        // `const run = world.run(); world.cancel()` shape hit it every time.
+        if (exec.timedOut !== true && exec.signalAborted() && err === exec.abortValue()) {
           exec.abortedByCancel = true;
         }
         emit({ type: 'system:error', ...info, error: exec.error });
@@ -1491,10 +1591,18 @@ class WorldImpl implements World {
 
     // `body` never rejects (it catches everything), but guard anyway: an
     // unhandled rejection from an abandoned pair would crash the host process.
-    body.catch(() => {});
+    // Cleared when the BODY settles, not when the race does: the one case an
+    // operator reaches for `runningPairs()` is a system hung badly enough to be
+    // abandoned, and deleting on the race made exactly that case invisible (R53).
+    body.catch(() => {}).then(() => this.inFlight.delete(key));
     await (deadline === undefined ? body : Promise.race([body, deadline]));
     if (timer !== undefined) timers.clearTimeout(timer);
-    this.inFlight.delete(key);
+    if (exec.abandoned === true) {
+      const tracked2 = this.inFlight.get(key);
+      if (tracked2 !== undefined) tracked2.abandoned = true;
+    } else {
+      this.inFlight.delete(key);
+    }
   }
 
   // ------------------------------------------------------------ pair context
@@ -1547,11 +1655,20 @@ class WorldImpl implements World {
     const signal =
       anySignal([this.runCancel?.signal, exec.timeoutController?.signal]) ??
       new AbortController().signal;
+    exec.signal = signal;
+    exec.signalAborted = () => signal.aborted;
+    exec.abortValue = () => abortReason(signal);
     const ctx: SystemCtx = {
       step: stepNo,
       world: this.worldReadView(),
       signal,
       spawn: (...items) => {
+        // An abandoned pair gets a dead handle BEFORE the counter moves (R52).
+        // `nextEntityId` is committed world state that lands in every snapshot,
+        // so letting a zombie increment it advanced the counter after the run had
+        // ended — a loop in an abandoned system would grow it without bound, and
+        // ids from a later run interleaved with the zombie's.
+        if (exec.abandoned === true) return this.bufferedView(0, exec);
         // Id allocated eagerly (R29); components materialize at the barrier.
         const id = this.nextEntityId++;
         pushOp(exec, { kind: 'spawn', entity: id, items });
@@ -1880,7 +1997,17 @@ class WorldImpl implements World {
     // Dirt for executed pairs and when-vetoes is consumed only now (R26
     // amended): a staging throw above leaves it intact, so the work stays
     // re-runnable and any snapshot remains boundary-consistent (R30/R35).
-    for (const exec of execs) this.dirt.get(exec.sys.key)?.delete(exec.entity);
+    for (const exec of execs) {
+      // A pair aborted BY the cancellation keeps its dirt (R50). Discarding a
+      // buffer is only safe because the failure becomes state and that state is
+      // itself foreign dirt; suppressing the ErrorRecord removed one leg, and
+      // consuming the dirt removed the last one — no writes, no error, nothing
+      // scheduled. A guard-less system was left permanently wedged with no
+      // diagnostics, and "removing Cancelled un-cancels the world" was false for
+      // it, because nothing re-matched to manufacture fresh dirt.
+      if (exec.abortedByCancel === true) continue;
+      this.dirt.get(exec.sys.key)?.delete(exec.entity);
+    }
     for (const veto of vetoed) this.dirt.get(veto.system)?.delete(veto.entity);
 
     // Scoped systems of spawned AgentDefs register here, deterministically
