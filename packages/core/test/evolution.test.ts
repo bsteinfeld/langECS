@@ -338,6 +338,37 @@ test('R57 claim() fences BEFORE any step runs, so side effects stay exactly-once
   expect(ran).toEqual(['contended']);
 });
 
+test('R57 claim() refuses a worker resuming a STALE snapshot, even if it claims first', async () => {
+  const adapter = new MemoryAdapter();
+  const seed = createWorld({ id: 'stale', persistence: adapter });
+  seed.use(writeArticle);
+  seed.spawn(Topic('one'));
+  await seed.run();
+  const older = (await adapter.load('stale')) as Snapshot; // step 1
+
+  // Someone advances the world while our worker still holds the older snapshot.
+  const ahead = createWorld({ id: 'stale', persistence: adapter });
+  ahead.use(writeArticle);
+  ahead.load(older);
+  ahead.query(Topic)[0]?.set(Topic, 'two');
+  await ahead.run();
+  expect(ahead.step).toBeGreaterThan(older.step);
+
+  // The stale worker claims FIRST in fence terms — its step is lower, so a
+  // monotonic fence has nothing to refuse it with. Without the staleness check it
+  // would be granted, run its side effects, and only be refused at its first save.
+  const stale = createWorld({ id: 'stale', persistence: adapter, fence: true });
+  stale.use(writeArticle);
+  stale.load(older);
+  await expect(stale.claim()).rejects.toThrow(/Snapshot is at step 1, but step 2 was expected/);
+
+  // A worker holding the CURRENT snapshot claims fine.
+  const current = createWorld({ id: 'stale', persistence: adapter, fence: true });
+  current.use(writeArticle);
+  current.load((await adapter.load('stale')) as Snapshot);
+  await expect(current.claim()).resolves.toBeUndefined();
+});
+
 test('R57 claim() refuses to pretend when the adapter cannot arbitrate', async () => {
   const world = createWorld({ id: 'noadapter' });
   await expect(world.claim()).rejects.toThrow(/needs a persistence adapter implementing fence/);
