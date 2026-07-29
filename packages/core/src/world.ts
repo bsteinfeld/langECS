@@ -517,6 +517,8 @@ class WorldImpl implements World {
    */
   private revision = 0;
   private savedRevision = 0;
+  /** Step this world currently holds a fence claim for (R57), if any. */
+  private ownedStep: number | undefined;
   /** Aborted by `cancel()` during a run; every pair's `ctx.signal` follows it (R50/R51). */
   private runCancel: AbortController | undefined;
   /** Cancellation requested during the current run but not yet stamped (R50). */
@@ -554,6 +556,28 @@ class WorldImpl implements World {
 
   private assertIdle(operation: string): void {
     if (this.runInFlight) throw new WorldRunningError(operation);
+  }
+
+  /**
+   * Records that committed state changed, so the next `persist()` writes (R58).
+   *
+   * EVERY path that mutates committed state must call this. Keying the save on a
+   * revision rather than the step number is what lets a cancellation boundary be
+   * persisted at all (it changes state without advancing the step) — but it also
+   * means a path that forgets to bump is silently never saved. Idle external
+   * mutations and an idle `cancel()` were exactly that: an idle run wrote nothing
+   * at all, and a cancelled world could resume un-cancelled.
+   */
+  private markChanged(): void {
+    this.revision += 1;
+  }
+
+  /** Drops an opaque value kept by a non-strict load, once live code owns the name (R55). */
+  private forgetPreserved(entity: number, name: string): void {
+    const kept = this.preserved.get(entity);
+    if (kept === undefined || !(name in kept)) return;
+    delete kept[name];
+    if (Object.keys(kept).length === 0) this.preserved.delete(entity);
   }
 
   // ------------------------------------------------------------- observers
@@ -681,6 +705,11 @@ class WorldImpl implements World {
     const comps = this.entities.get(entity);
     if (!comps) return;
     const name = componentNameOf(component);
+    // Once live code writes this name, the opaque value kept from a non-strict
+    // load is stale and must go (R55). Leaving it meant the next `snapshot()`
+    // re-emitted the OLD value over the new one, and a deliberate `remove` was
+    // silently undone by the other deployment's data.
+    this.forgetPreserved(entity, name);
     let kind: 'set' | 'merge' = 'set';
     let next = value;
     if (op === 'add' && component.reducer && comps.has(name)) {
@@ -823,6 +852,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.applySpawnItems(id, items, changes, 'external');
     this.refreshDirt(changes);
+    this.markChanged();
     this.notifyExternal({ kind: 'spawn', entity: id });
     return this.externalHandle(id);
   }
@@ -864,6 +894,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.commitWrite(id, component, value, op, 'external', changes);
     this.refreshDirt(changes);
+    this.markChanged();
     this.notifyExternal({ kind: 'write', entity: id, component: component.componentName });
   }
 
@@ -872,11 +903,13 @@ class WorldImpl implements World {
     const comps = this.entities.get(id);
     if (!comps) throw new UnknownEntityError(id);
     const name = component.componentName;
+    this.forgetPreserved(id, name);
     if (!comps.has(name)) return;
     comps.delete(name);
     this.refreshDirt([
       { record: { entity: id, component: name, kind: 'remove' }, writer: 'external' },
     ]);
+    this.markChanged();
     this.notifyExternal({ kind: 'remove', entity: id, component: name });
   }
 
@@ -884,8 +917,10 @@ class WorldImpl implements World {
     this.assertIdle('despawn entities externally');
     if (!this.entities.has(id)) throw new UnknownEntityError(id);
     this.entities.delete(id);
+    this.preserved.delete(id);
     for (const entityMap of this.dirt.values()) entityMap.delete(id);
     for (const matchSet of this.matched.values()) matchSet.delete(id);
+    this.markChanged();
     this.notifyExternal({ kind: 'despawn', entity: id });
   }
 
@@ -1046,6 +1081,9 @@ class WorldImpl implements World {
       this.commitWrite(id, Cancelled, deepClone(record), 'set', writer, changes);
     }
     this.refreshDirt(changes);
+    // Both branches, idle and mid-run: an unpersisted cancellation means the world
+    // resumes un-cancelled and continues the work that was stopped.
+    if (changes.length > 0) this.markChanged();
     if (writer === 'external') {
       for (const change of changes) {
         this.notifyExternal({
@@ -1093,9 +1131,6 @@ class WorldImpl implements World {
       if (cancellation !== undefined) {
         this.pendingCancel = undefined;
         const changes = this.stampCancelled(cancellation, 'engine');
-        // A cancellation changes state without advancing the step, so the
-        // revision is what makes the run-end save notice it.
-        if (changes.length > 0) this.revision += 1;
         const applied = changes.map((c) => c.record);
         this.pushTrace({
           step: stepNo,
@@ -1166,6 +1201,9 @@ class WorldImpl implements World {
       // dirt is consumed here, at this run's final boundary (R26).
       if (execs.length === 0) {
         for (const veto of vetoed) this.dirt.get(veto.system)?.delete(veto.entity);
+        // Consuming veto dirt changes `pendingPairs`, which is snapshot state
+        // (R35) — without this the store keeps dirt the world already discarded.
+        if (vetoed.length > 0) this.markChanged();
         this.pushTrace({
           step: stepNo,
           scheduled: scheduledRefs,
@@ -1231,7 +1269,7 @@ class WorldImpl implements World {
       });
 
       this.stepCount += 1;
-      this.revision += 1;
+      this.markChanged();
       // Cadence (R58): 'barrier' persists every step, a number every N steps,
       // 'quiescence' not at all here — the run-end save below covers it.
       if (this.shouldSaveAtStep(this.stepCount)) await this.persist();
@@ -1286,6 +1324,7 @@ class WorldImpl implements World {
     }
     const granted = await adapter.fence(this.id, this.stepCount);
     if (!granted) throw new FenceError(this.id, this.stepCount);
+    this.ownedStep = this.stepCount;
   }
 
   /** Whether the configured cadence persists at this committed step (R58). */
@@ -1319,9 +1358,17 @@ class WorldImpl implements World {
     if (adapter === undefined) return;
     if (this.revision === this.savedRevision) return;
     const snapshot = this.snapshot();
-    if (this.fenced && adapter.fence !== undefined) {
+    // Re-claiming a step this world already holds is skipped, not re-fenced.
+    // The fence is keyed on the STEP while the save is keyed on the REVISION, and
+    // those clocks disagree at any boundary that changes state without advancing
+    // the step — a cancellation, most obviously. Without this, cancelling a fenced
+    // world made it fence ITSELF out of its own step: the run rejected with
+    // `FenceError` naming a nonexistent rival, and the cancellation was never
+    // persisted, so the advice to "discard it and reload" resumed a live world.
+    if (this.fenced && adapter.fence !== undefined && snapshot.step !== this.ownedStep) {
       const granted = await adapter.fence(this.id, snapshot.step);
       if (!granted) throw new FenceError(this.id, snapshot.step);
+      this.ownedStep = snapshot.step;
     }
     await adapter.save(snapshot);
     this.savedRevision = this.revision;
@@ -1831,6 +1878,7 @@ class WorldImpl implements World {
     for (const item of staged) {
       const comps = this.entities.get(item.entity);
       if (!comps) continue; // unreachable: staged targets exist or were shelled
+      this.forgetPreserved(item.entity, item.name);
       if (item.op === 'set') comps.set(item.name, item.value);
       else comps.delete(item.name);
       changes.push(item.change);
@@ -1841,6 +1889,7 @@ class WorldImpl implements World {
     for (const id of [...despawnSet].sort((a, b) => a - b)) {
       if (!this.entities.has(id)) continue;
       this.entities.delete(id);
+      this.preserved.delete(id);
       despawned.push(id);
       for (const entityMap of this.dirt.values()) entityMap.delete(id);
     }
@@ -1964,6 +2013,24 @@ class WorldImpl implements World {
   }
 
   migration(from: number, to: number, fn: Migration): void {
+    // R54 says the chain is walked ASCENDING; nothing enforced it, so a
+    // 1->9 plus 9->3 pair would happily walk a v1 snapshot up past the world's own
+    // version and back down, and `canLoad` would call it fine — the very thing R54
+    // refuses when it appears on the envelope.
+    if (to <= from) {
+      throw new LangECSError(
+        `Migration ${from} -> ${to} does not move forward. Migrations form a single ascending ` +
+          `chain (R54): a downgrade path cannot be replayed onto newer code, and a cycle would ` +
+          `never converge.`,
+      );
+    }
+    if (to > this.recipeVersion) {
+      throw new LangECSError(
+        `Migration ${from} -> ${to} overshoots this world's recipeVersion ${this.recipeVersion} ` +
+          `(R54). Raise the world's recipeVersion, or split the step — otherwise the chain ` +
+          `migrates past the schema this build understands and then fails on a hop nobody wrote.`,
+      );
+    }
     const existing = this.migrations.get(from);
     if (existing && existing.to !== to) {
       throw new DuplicateMigrationError(from, existing.to, to);
@@ -2014,7 +2081,21 @@ class WorldImpl implements World {
         systems: [],
       };
     }
-    const chain = this.migrateChain(snapshot);
+    let chain: ReturnType<typeof this.migrateChain>;
+    try {
+      chain = this.migrateChain(snapshot);
+    } catch (err) {
+      // A migration is user code and can throw. `canLoad` is the deploy gate, so a
+      // broken migration is precisely what it should REPORT — crashing the
+      // pipeline with a raw user error would break R56's no-throw contract at the
+      // one moment it matters.
+      return {
+        ok: false,
+        migrationFailed: { error: serializeError(err) },
+        components: [],
+        systems: [],
+      };
+    }
     if ('gap' in chain) {
       return {
         ok: false,
@@ -2142,7 +2223,7 @@ class WorldImpl implements World {
     // A just-loaded boundary came FROM storage, so it needs no write of its own;
     // marking it saved keeps a fenced resume from immediately re-claiming the
     // step it just read (R57).
-    this.revision += 1;
+    this.markChanged();
     this.savedRevision = this.revision;
     this.notifyExternal({ kind: 'load' });
     return report;

@@ -1,5 +1,7 @@
 /** Snapshot format (R35). Always JSON-stringifiable (R3 + serialize hooks). */
 
+import type { SerializedError } from './errors';
+
 export interface SnapshotEntity {
   id: number;
   /** Component name -> serialized value. Transient components excluded. */
@@ -87,6 +89,12 @@ export type LoadCheck =
       recipeVersion?: { found: number; supported: number };
       /** No migration path from the snapshot's `recipeVersion` to this world's. */
       missingMigration?: { from: number; to: number };
+      /**
+       * A registered migration threw. Reported rather than propagated, because
+       * `canLoad` is the deploy gate and a broken migration is exactly what it
+       * exists to catch (R56).
+       */
+      migrationFailed?: { error: SerializedError };
       /** Component names absent from the global registry (R36). */
       components: string[];
       /** `pendingPairs` systems not registered on this world (R36). */

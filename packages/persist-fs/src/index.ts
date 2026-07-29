@@ -6,7 +6,7 @@
 // work from the directory listing; every read is tolerant of missing dirs.
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PersistenceAdapter, Snapshot } from '@langecs/core';
 
@@ -138,35 +138,41 @@ export function fsAdapter(options: FsAdapterOptions): FsAdapter {
     },
 
     /**
-     * Monotonic fence via exclusive create (R57).
+     * Monotonic fence via exclusive create, then validate (R57).
      *
-     * `wx` fails with EEXIST if the file is already there, and that check-and-
-     * create is atomic in the kernel — so two workers racing to claim the same
-     * step cannot both win, even across processes. A read-then-write would
-     * reintroduce exactly the race this exists to close.
+     * `wx` fails with EEXIST if the file exists, and that check-and-create is
+     * atomic in the kernel — but only against an **identical filename**, i.e. an
+     * identical step. Two workers claiming DIFFERENT steps never contend on the
+     * name at all, so a plain read-then-write left them both granted: each read
+     * the directory before the other wrote, saw nothing higher, and proceeded.
+     *
+     * So the order is inverted: create the lock first, then look around. If a
+     * higher claim exists, this caller is stale — it withdraws its own lock and
+     * loses. Concurrently or not, the highest step always wins, and exactly one
+     * caller keeps its lock for any given step.
      *
      * One lock file per step (`fence-NNNNNN.lock`) rather than one mutable file,
-     * because "claim step N" has to refuse N and everything below it: the
-     * presence of any lock at or above N is the refusal, and checking that needs
-     * no locking of its own.
+     * because "claim step N" must refuse N and everything below it: the presence
+     * of any lock at or above N is the refusal.
      */
     async fence(worldId: string, step: number): Promise<boolean> {
       const dir = worldDir(worldId);
       await mkdir(dir, { recursive: true });
-      // Someone already owns this step or a later one: this world has lost.
-      const highest = await highestFence(dir);
-      if (highest !== undefined && step <= highest) return false;
+      const name = fenceFileName(step);
       try {
-        await writeFile(join(dir, fenceFileName(step)), String(Date.now()), {
-          encoding: 'utf8',
-          flag: 'wx',
-        });
-        return true;
+        await writeFile(join(dir, name), String(step), { encoding: 'utf8', flag: 'wx' });
       } catch (err) {
-        // EEXIST: another writer claimed this exact step in between.
+        // EEXIST: this exact step is already claimed, by us or by someone else.
         if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'EEXIST') return false;
         throw err;
       }
+      const highest = await highestFence(dir);
+      if (highest !== undefined && highest > step) {
+        // Someone is further ahead: withdraw so we do not hold a claim we lost.
+        await rm(join(dir, name), { force: true });
+        return false;
+      }
+      return true;
     },
   };
 }
