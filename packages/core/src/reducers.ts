@@ -1,3 +1,5 @@
+import { LangECSError } from './errors';
+
 // Standard reducers (R59). Reducers are how LangECS avoids silent
 // last-write-wins (R30), so every fan-in pattern needs one — and everybody
 // writes the same five.
@@ -15,6 +17,14 @@ export type Reducer<T> = (current: T, incoming: T) => T;
  * treated as immutable (R17 amended). Every reducer here returns a new value and
  * never mutates its arguments; a reducer of your own that mutates `current`
  * corrupts committed state in a way the engine cannot detect.
+ *
+ * **A reducer never sees the FIRST write.** The engine merges only when the
+ * component is already present (R30), so the initial value — whether from
+ * `spawn`, an agent bundle, or the first external `add` — is stored verbatim.
+ * That matters for the constraining reducers: a component seeded at spawn with
+ * 10 items and `boundedAppend(3)` stays over its cap until the next write, and
+ * duplicates *within* a first `dedupeByReducer` payload survive. Seed with `[]`
+ * and let the first real write merge if the invariant has to hold from step one.
  */
 
 /**
@@ -43,7 +53,19 @@ export function appendReducer<T>(): Reducer<T[]> {
  */
 export function boundedAppend<T>(max: number, opts?: { keep?: 'first' | 'last' }): Reducer<T[]> {
   const keep = opts?.keep ?? 'last';
-  const limit = Math.max(0, Math.floor(max));
+  // Validated at FACTORY time, not inside the closure: a reducer that throws
+  // would reject the whole run during barrier staging (R30), long after the
+  // mistake was made. `Math.max(0, Math.floor(NaN))` is NaN, so
+  // `merged.length <= NaN` was false and the slice returned everything — the cap
+  // silently became unbounded, which is precisely the growth R59 exists to
+  // prevent. Reachable as `boundedAppend(Number(process.env.MAX_LOG))`.
+  if (!Number.isInteger(max) || max <= 0) {
+    throw new LangECSError(
+      `boundedAppend(${String(max)}) needs a positive integer cap (R59). A non-numeric cap ` +
+        `silently becomes UNBOUNDED, and a zero or negative one silently discards every write.`,
+    );
+  }
+  const limit = max;
   return (current, incoming) => {
     const merged = [...current, ...incoming];
     if (merged.length <= limit) return merged;
@@ -84,8 +106,21 @@ export function maxByReducer<T>(score: (value: T) => number): Reducer<T> {
  * deterministic.
  */
 export function dedupeByReducer<T>(key: (value: T) => string | number): Reducer<T[]> {
+  // Rebuilding the key set per write was exactly n²/2 `key()` calls — 12.5M for
+  // 5,000 sequential writes — and it runs in the barrier's STAGING phase, the
+  // synchronous section gating the commit for every pair in the step. Memoized on
+  // the identity of `current`, which is the previously committed array and so is
+  // stable between writes; purity is untouched because nothing is mutated.
+  const keysOf = new WeakMap<readonly T[], Set<string | number>>();
+  const keySet = (values: T[]): Set<string | number> => {
+    const hit = keysOf.get(values);
+    if (hit !== undefined) return hit;
+    const built = new Set(values.map(key));
+    keysOf.set(values, built);
+    return built;
+  };
   return (current, incoming) => {
-    const seen = new Set(current.map(key));
+    const seen = new Set(keySet(current));
     const out = [...current];
     for (const item of incoming) {
       const id = key(item);
@@ -93,6 +128,7 @@ export function dedupeByReducer<T>(key: (value: T) => string | number): Reducer<
       seen.add(id);
       out.push(item);
     }
+    keysOf.set(out, seen);
     return out;
   };
 }
