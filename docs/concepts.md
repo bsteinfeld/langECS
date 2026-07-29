@@ -395,7 +395,8 @@ editing the result of `handle.get(C)`.
   [multi-agent patterns](./guides/multi-agent.md),
   [persistence and time travel](./guides/persistence-and-time-travel.md),
   [schema evolution and resume safety](./guides/schema-evolution-and-resume-safety.md),
-  [streaming and observability](./guides/streaming-and-observability.md).
+  [streaming and observability](./guides/streaming-and-observability.md),
+  [model middleware and fixtures](./guides/model-middleware-and-fixtures.md).
 - [langgraph-comparison.md](./langgraph-comparison.md) — for LangGraph.js
   developers; honest divergence list.
 - [prior-art.md](./prior-art.md) — the survey of adjacent work.

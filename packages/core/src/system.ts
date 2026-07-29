@@ -2,6 +2,7 @@ import type { AgentDef } from './agent';
 import type { ComponentInit, ComponentType, QueryTerm, TagType } from './component';
 import { isComponentType } from './component';
 import { LangECSError } from './errors';
+import type { EventRef } from './event';
 import type { ResourceRef } from './resource';
 
 /** Value type carried by a component type. */
@@ -94,7 +95,17 @@ export interface SystemCtx {
     op?: 'add' | 'set',
   ): void;
   remove(target: EntityTarget, component: ComponentType<any>): void;
-  /** Pushes a `custom` event to the live run stream immediately, mid-step (R23). */
+  /**
+   * Pushes a `custom` event to the live run stream immediately, mid-step (R23).
+   *
+   * The typed form (R60) carries the ref's name on the event, so observers can
+   * filter by name rather than parsing every payload:
+   * ```ts
+   * const Token = defineEvent<{ text: string }>('token')
+   * ctx.emit(Token, { text: 'hi' })
+   * ```
+   */
+  emit<T>(event: EventRef<T>, payload: T): void;
   emit(data: unknown): void;
   /**
    * Typed resource lookup via a `ResourceRef` (R18 amended): `T` comes from
