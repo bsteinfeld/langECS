@@ -177,6 +177,18 @@ Claiming before any step executes is what stops the loser from doing the work at
 all. The example test asserts exactly this: two workers resume one approval, and
 `delete_record` runs **once**.
 
+`claim()` guards two different races, and it needs both:
+
+- **Two workers on the same snapshot** — resolved by the fence. Both ask to claim
+  the same step; exactly one is granted.
+- **A worker on a stale snapshot** — resolved by a step check, because the fence
+  *cannot* catch this one. A monotonic fence refuses a step at or below one
+  already claimed, but a worker holding an older snapshot claims a *lower* step,
+  so if it claims first there is nothing to refuse it with. `claim()` therefore
+  also compares against the adapter's latest persisted step and throws
+  `StaleSnapshotError` when it is behind. Always claim against a freshly loaded
+  snapshot, not a cached one.
+
 With `fence: true`, the engine also calls `adapter.fence(worldId, step)` immediately
 **before each save** — the moment divergence would actually become durable, and
 already an awaited async boundary — and rejects the run with `FenceError` if
