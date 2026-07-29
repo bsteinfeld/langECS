@@ -1,4 +1,10 @@
-import { type Model, type ModelRequest, type ModelResult, throwIfAborted } from '@langecs/core';
+import {
+  abortReason,
+  type Model,
+  type ModelRequest,
+  type ModelResult,
+  throwIfAborted,
+} from '@langecs/core';
 import { generateText, type LanguageModel, streamText } from 'ai';
 import {
   type AiSdkToolCall,
@@ -34,22 +40,28 @@ export function fromAiSdk(model: LanguageModel): Model {
     seed: req.seed,
     stopSequences: req.stopSequences,
     // Cooperative cancellation (R49): the SDK aborts the underlying HTTP
-    // request, so `ctx.signal` (a cancelled world or an elapsed system timeout)
-    // actually stops the call rather than just stopping the wait.
-    abortSignal: req.signal,
+    // request, so an aborting signal actually stops the call rather than just
+    // stopping the wait. Spread conditionally so the key is absent — not present
+    // and `undefined` — when no signal was supplied.
+    ...(req.signal !== undefined ? { abortSignal: req.signal } : {}),
     // Core `Msg[]` may legitimately contain role:'system' entries.
     allowSystemInMessages: true,
   });
 
   return {
     async generate(req: ModelRequest): Promise<ModelResult> {
-      // Enforce R49's "reject, never resolve" at the adapter boundary rather
-      // than trusting the provider: forwarding `abortSignal` covers an abort
-      // that lands mid-flight (the SDK aborts the HTTP request), but a signal
-      // that was ALREADY aborted before the call reaches some providers as a
-      // normal request. A cancelled world must never observe a fresh reply.
+      // R49 is enforced at the adapter boundary in three parts, rather than
+      // trusting the provider:
+      //   1. check on entry — an ALREADY-aborted signal reaches some providers
+      //      as a perfectly normal request, so it must never go out;
+      //   2. forward `abortSignal` (in `callOptions`) — the SDK aborts the
+      //      underlying HTTP request, so an abort landing mid-flight actually
+      //      stops the call instead of only stopping our wait;
+      //   3. check again before delivering — a provider that ignores the signal
+      //      still cannot resolve into a cancelled caller.
       throwIfAborted(req.signal);
       const result = await generateText(callOptions(req));
+      throwIfAborted(req.signal);
       return {
         message: toAssistantMsg(result.text, result.toolCalls, result.reasoningText),
         usage: toUsage(result.usage),
@@ -91,6 +103,12 @@ export function fromAiSdk(model: LanguageModel): Model {
             usage = toUsage(part.totalUsage);
             break;
           case 'abort':
+            // The SDK treats an abort as a graceful end-of-stream: it emits this
+            // part and closes. R49 says reject instead — and with the signal's
+            // own `reason`, so `err.name === 'AbortError'` and custom reasons
+            // both survive. The generic error covers an 'abort' part arriving
+            // without a signal to explain it.
+            if (req.signal !== undefined) throw abortReason(req.signal);
             throw new Error('AI SDK stream aborted');
           case 'error':
             throw part.error instanceof Error ? part.error : new Error(String(part.error));
@@ -98,6 +116,9 @@ export function fromAiSdk(model: LanguageModel): Model {
             break;
         }
       }
+      // Third R49 check (see `generate`): a provider that ended its stream
+      // normally despite the abort must not resolve into a cancelled caller.
+      throwIfAborted(req.signal);
       return {
         message: toAssistantMsg(text, toolCalls, reasoning.length > 0 ? reasoning : undefined),
         usage,

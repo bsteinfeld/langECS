@@ -8,7 +8,7 @@ import {
   SystemMessage,
   type ToolMessage,
 } from '@langchain/core/messages';
-import type { ChatResult } from '@langchain/core/outputs';
+import { ChatGenerationChunk, type ChatResult } from '@langchain/core/outputs';
 import {
   FakeChatModel,
   FakeListChatModel,
@@ -230,5 +230,61 @@ describe('fromLangChain · cancellation (R49)', () => {
       fromLangChain(lc).stream?.({ ...userReq('hi'), signal: controller.signal }, () => {}),
     ).rejects.toThrow();
     expect(lc.received).toEqual([]);
+  });
+});
+
+/**
+ * A chat model that ignores the `signal` call option entirely: it aborts the
+ * caller's controller partway and then completes normally. R49's "reject, never
+ * resolve" must hold against a provider like this, not only against ones that
+ * cooperate.
+ */
+class SignalIgnoringChatModel extends BaseChatModel {
+  constructor(private readonly abortNow: () => void) {
+    super({});
+  }
+  _llmType() {
+    return 'signal-ignoring';
+  }
+  async _generate(): Promise<ChatResult> {
+    this.abortNow();
+    return { generations: [{ text: 'late reply', message: new AIMessage('late reply') }] };
+  }
+  async *_streamResponseChunks(): AsyncGenerator<ChatGenerationChunk> {
+    yield new ChatGenerationChunk({ text: 'Par', message: new AIMessageChunk('Par') });
+    yield new ChatGenerationChunk({ text: 'tial', message: new AIMessageChunk('tial') });
+    // Abort only after the last chunk, so the adapter's for-await loop has
+    // already drained: the check *after* the loop is what must reject here.
+    this.abortNow();
+  }
+}
+
+describe('fromLangChain · cancellation mid-flight (R49)', () => {
+  it('generate() rejects when the signal aborts mid-flight, even if the model ignores it', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled mid-flight');
+    const lc = new SignalIgnoringChatModel(() => controller.abort(reason));
+    await expect(
+      fromLangChain(lc).generate({ ...userReq('hi'), signal: controller.signal }),
+    ).rejects.toBe(reason);
+  });
+
+  // Contract test, not a test of the adapter's own check: @langchain/core
+  // already calls `signal.throwIfAborted()` internally on this path. It pins
+  // R49 for the stream path regardless of which layer enforces it; the
+  // adapter's post-loop check is the backstop if that ever changes.
+  it('stream() rejects rather than resolving a result built from a cancelled call', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled mid-stream');
+    const lc = new SignalIgnoringChatModel(() => controller.abort(reason));
+    const chunks: string[] = [];
+    await expect(
+      fromLangChain(lc).stream?.({ ...userReq('hi'), signal: controller.signal }, (d) => {
+        if (d.text) chunks.push(d.text);
+      }),
+    ).rejects.toBe(reason);
+    // Chunks already forwarded stay forwarded; what must not happen is
+    // resolving a ModelResult built from a cancelled call.
+    expect(chunks).toEqual(['Par', 'tial']);
   });
 });

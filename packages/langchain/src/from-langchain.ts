@@ -36,21 +36,27 @@ export function fromLangChain(chatModel: BaseChatModel): Model {
   };
 
   // Cooperative cancellation (R49): LangChain takes `signal` as a call option
-  // on every runnable, so an aborted `ctx.signal` stops the provider request.
+  // on every runnable, so an aborted signal stops the provider request.
   // Omitted entirely when unset, so callers see no behavior change.
   const callOptions = (req: ModelRequest): { signal?: AbortSignal } | undefined =>
     req.signal === undefined ? undefined : { signal: req.signal };
 
   return {
     async generate(req) {
-      // R49's "reject, never resolve" enforced here, not left to the provider:
-      // an already-aborted signal must not produce a fresh reply.
+      // R49 is enforced at the adapter boundary in three parts, rather than
+      // trusting the provider: check on entry, so an already-aborted signal
+      // never produces a fresh reply; forward it as the call's `signal` option,
+      // so an abort landing mid-flight stops the provider request; then check
+      // again before delivering, so a provider that ignores the signal still
+      // cannot resolve into a cancelled caller.
       throwIfAborted(req.signal);
       const message = await bound(req).invoke(toLangChainMessages(req), callOptions(req));
+      throwIfAborted(req.signal);
       return toModelResult(message);
     },
 
     async stream(req, onChunk) {
+      // Same three-point rule as `generate`.
       throwIfAborted(req.signal);
       const stream = await bound(req).stream(toLangChainMessages(req), callOptions(req));
       let final: AIMessageChunk | undefined;
@@ -59,6 +65,7 @@ export function fromLangChain(chatModel: BaseChatModel): Model {
         if (text.length > 0) onChunk({ text });
         final = final === undefined ? chunk : final.concat(chunk);
       }
+      throwIfAborted(req.signal);
       if (final === undefined) {
         throw new Error('@langecs/langchain: chat model stream yielded no chunks.');
       }

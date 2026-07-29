@@ -158,8 +158,8 @@ export class MissingResourceError extends LangECSError {
 }
 
 /**
- * Thrown when work is abandoned because its `AbortSignal` fired (R49) — a
- * cancelled world (R50) or an elapsed system timeout (R52).
+ * Thrown when work is abandoned because its `AbortSignal` fired (R49) — the
+ * caller cancelled, or a deadline it set around the call elapsed.
  *
  * Cooperative cancellation prefers re-throwing the signal's own `reason` (on
  * platforms that populate it, that is a `DOMException` named `AbortError`);

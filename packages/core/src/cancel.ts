@@ -58,14 +58,21 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * An `AbortSignal` that aborts as soon as **any** input signal does (R51) —
- * how a pair's per-step signal follows both the run-wide cancellation signal
- * and its own `timeoutMs` deadline.
+ * An `AbortSignal` that aborts as soon as **any** input signal does (R49) — how
+ * a caller composes a long-lived cancellation signal it owns with a per-call
+ * deadline, so one signal can be handed to `ModelRequest.signal`.
  *
  * Prefers the platform's `AbortSignal.any` when present and falls back to a
  * hand-rolled controller, so behavior is identical on runtimes that predate it
  * (R1). Returns the sole input unchanged when there is only one, and an
  * already-aborted signal when any input is already aborted.
+ *
+ * Retention, on the fallback path only: each input carries one listener until
+ * the composite aborts, at which point every listener is removed. A composite
+ * that *never* aborts therefore retains one listener per input for that input's
+ * lifetime — so on runtimes without native `AbortSignal.any`, keep composites
+ * short-lived relative to their inputs rather than building one per call from a
+ * long-lived signal. Native `AbortSignal.any` has no such retention.
  */
 export function anySignal(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
   const present = signals.filter((s): s is AbortSignal => s !== undefined);
@@ -74,12 +81,27 @@ export function anySignal(signals: (AbortSignal | undefined)[]): AbortSignal | u
   const native = platform.AbortSignal?.any;
   if (typeof native === 'function') return native.call(platform.AbortSignal, present);
   const controller = new platform.AbortController();
+  // Listeners are torn down as a set the moment the composite resolves, whether
+  // that happens synchronously below or on a later abort. Without this a
+  // long-lived input accumulates one stale listener per composite built from it
+  // — each retaining that composite's controller — for the whole run.
+  const cleanups: (() => void)[] = [];
+  const releaseAll = (): void => {
+    for (const cleanup of cleanups) cleanup();
+    cleanups.length = 0;
+  };
   for (const signal of present) {
     if (signal.aborted) {
+      releaseAll();
       controller.abort(abortReason(signal));
       return controller.signal;
     }
-    signal.addEventListener('abort', () => controller.abort(abortReason(signal)), { once: true });
+    const onAbort = (): void => {
+      releaseAll();
+      controller.abort(abortReason(signal));
+    };
+    cleanups.push(() => signal.removeEventListener('abort', onAbort));
+    signal.addEventListener('abort', onAbort, { once: true });
   }
   return controller.signal;
 }

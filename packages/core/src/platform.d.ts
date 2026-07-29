@@ -15,8 +15,16 @@
 // ambient file is not reachable through the import graph, so the sibling
 // packages that compile core's *source* under `types: []` (`stdlib`,
 // `langchain`, `otel`) name it in their tsconfig `include`. Packages that do
-// have node types (`ai-sdk`, `devtools`, `persist-fs`, `examples`) must not —
-// two `declare const AbortController`s in one program is a redeclaration error.
+// have node types (`ai-sdk`, `devtools`, `persist-fs`, `examples`) must not.
+//
+// That conflict is real but currently invisible: these declarations and
+// `@types/node`'s collide as 8x TS2451 ("Cannot redeclare block-scoped
+// variable") — which `skipLibCheck: true` in `tsconfig.base.json` suppresses,
+// since errors inside a `.d.ts` are exactly what it skips. Verify with
+// `tsc --skipLibCheck false`. So adding this file to a node-typed package is a
+// silent no-op today rather than a build break; keep the two sets disjoint
+// anyway, so the constraint stays true if `skipLibCheck` is ever tightened.
+//
 // Core's runtime code still reaches the constructors through `globalThis` (see
 // `cancel.ts`), the way it reaches `performance` and `setTimeout`, so the value
 // declarations below serve type-checking only.
@@ -45,6 +53,6 @@ declare const AbortController: {
 
 declare const AbortSignal: {
   prototype: AbortSignal;
-  /** ES2024-era addition; `anySignal` feature-detects it and falls back (R51). */
+  /** ES2024-era addition; `anySignal` feature-detects it and falls back (R49). */
   any?(signals: AbortSignal[]): AbortSignal;
 };
