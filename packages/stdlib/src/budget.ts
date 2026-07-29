@@ -12,9 +12,12 @@ import {
   type ComponentType,
   defineComponent,
   defineSystem,
+  type GuardCtx,
+  LangECSError,
+  type ModelRequest,
   type ModelResult,
-  Not,
 } from '@langecs/core';
+import { estimateTokens } from './context';
 
 /** One model call's cost, as appended to `TokenUsage`. */
 export type Spend = {
@@ -52,11 +55,18 @@ export type BudgetStatus = { spent: number; budget: number };
  */
 export const BudgetExceeded: ComponentType<BudgetStatus> = defineComponent<BudgetStatus>({
   name: 'BudgetExceeded',
+  // Two budget holders sharing one spender is two distinct pairs writing this
+  // component in one step — a `WriteConflictError` that rejected the run and
+  // stamped nothing at all, the exact inverse of "state that stops further work,
+  // not an exception that discards it". Keeping the larger overspend makes the
+  // merge order-independent, so the outcome cannot depend on registration order.
+  reducer: (current, incoming) => (incoming.spent > current.spent ? incoming : current),
 });
 
 /** Stamped when spend crosses `warnAt`, for a "continue?" interaction. */
 export const BudgetWarning: ComponentType<BudgetStatus> = defineComponent<BudgetStatus>({
   name: 'BudgetWarning',
+  reducer: (current, incoming) => (incoming.spent > current.spent ? incoming : current),
 });
 
 /** Total tokens in a ledger. */
@@ -71,15 +81,27 @@ export const spentTokens = (ledger: Spend[]): number =>
  * e.add(TokenUsage, [spendOf('research', result)])
  * ```
  *
- * Providers that report no usage (including `scriptedModel`) are estimated from
- * message length at ~4 characters per token, so a budget test is deterministic
- * and a real run is roughly right rather than silently free.
+ * Providers that report no usage (including `scriptedModel`) are estimated with
+ * `estimateTokens` over the request *and* the reply, so a budget test is
+ * deterministic and a real run is roughly right rather than silently free. Pass
+ * the request — omitting it bills the prompt as zero, and the prompt is usually
+ * the larger half.
  */
-export function spendOf(system: string, result: ModelResult, requestChars = 0): Spend {
+export function spendOf(system: string, result: ModelResult, req?: ModelRequest): Spend {
   const reported = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
   if (reported > 0) return { system, tokens: reported };
-  const chars = requestChars + result.message.content.length;
-  return { system, tokens: Math.max(1, Math.ceil(chars / 4)) };
+  // Takes the REQUEST, not a character count. The old `requestChars = 0` default
+  // meant the prompt — usually the dominant cost, and a `Messages` history
+  // re-sent in full every turn — was billed as free unless every call site
+  // remembered to pass it. A ReAct agent at turn 20 undercounted by 10-100x, so a
+  // "50k budget" permitted far more, and forgetting it in one system of five made
+  // that system free. Reuses stdlib's own `estimateTokens`, which already walks
+  // tool calls and adds per-message overhead.
+  const prompt =
+    req === undefined
+      ? 0
+      : estimateTokens(req.messages) + (req.system === undefined ? 0 : estimateTokens(req.system));
+  return { system, tokens: Math.max(1, prompt + estimateTokens([result.message])) };
 }
 
 export interface BudgetWatchdogOptions {
@@ -100,6 +122,13 @@ export interface BudgetWatchdogOptions {
   onExceeded?: (status: BudgetStatus) => void;
   /** Called when `warnAt` is crossed. */
   onApproachingCap?: (status: BudgetStatus) => void;
+  /**
+   * System name, so a world can hold more than one budget (a global cap plus a
+   * per-team cap, say). The name was hardcoded, and `world.use` dedupes by object
+   * identity — so a second `budgetWatchdog()` threw `DuplicateSystemError`, and
+   * even calling the factory twice with identical options failed.
+   */
+  name?: string;
 }
 
 /**
@@ -117,13 +146,46 @@ export interface BudgetWatchdogOptions {
 export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
   const warnAt = opts?.warnAt;
   const stampOn = opts?.stampOn ?? [];
+  // Validated at registration, which is the right moment to fail. `warnAt: 1`
+  // reads as "warn at 100%" and produced ZERO warnings forever, because the
+  // over-budget branch short-circuits first; so did `warnAt: 80`, which is what a
+  // user thinking in percent actually writes. A notification wired to either was
+  // silently never sent.
+  if (warnAt !== undefined && !(warnAt > 0 && warnAt < 1)) {
+    throw new LangECSError(
+      `budgetWatchdog({ warnAt: ${String(warnAt)} }) needs a fraction strictly between 0 and 1 ` +
+        `(R63). At 1 or above the warning can never fire, because exceeding the budget is ` +
+        `handled first — did you mean ${warnAt >= 1 ? warnAt / 100 : 0.8}?`,
+    );
+  }
+
+  /** Every entity the brake has to reach: the holder plus each `stampOn` match. */
+  const unstampedSpenders = (ctx: GuardCtx, holder: number): boolean => {
+    for (const marker of stampOn) {
+      for (const spender of ctx.world.query(marker)) {
+        if (spender.id !== holder && !spender.has(BudgetExceeded)) return true;
+      }
+    }
+    return false;
+  };
+
   return defineSystem({
-    name: 'budgetWatchdog',
-    query: [TokenUsage, TokenBudget, Not(BudgetExceeded)],
-    when: (e) => {
+    name: opts?.name ?? 'budgetWatchdog',
+    // NOT `Not(BudgetExceeded)`. With that term the watchdog unmatched itself
+    // permanently the moment it stamped the holder, freezing the braked set at
+    // whoever existed then — so a spender spawned afterwards (a second planning
+    // round, a retry-spawned worker) called the model, billed the ledger and ran
+    // unbounded, with the watchdog gone and the run still reporting 'done'. The
+    // whole decision belongs in the guard, which is where this module already
+    // said it lived.
+    query: [TokenUsage, TokenBudget],
+    when: (e, ctx) => {
       const spent = spentTokens(e.get(TokenUsage));
       const budget = e.get(TokenBudget);
-      if (spent > budget) return true;
+      if (spent > budget) {
+        // Fire while anything still needs the brake — the holder or a late spender.
+        return !e.has(BudgetExceeded) || unstampedSpenders(ctx, e.id);
+      }
       // Warn once: re-stamping every step would churn dirt for no new information.
       return warnAt !== undefined && spent > budget * warnAt && !e.has(BudgetWarning);
     },
@@ -138,15 +200,28 @@ export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
         return;
       }
 
-      e.set(BudgetExceeded, status);
+      const first = !e.has(BudgetExceeded);
+      // Conditional, so re-firing for a late spender does not churn the holder.
+      if (first) e.set(BudgetExceeded, status);
+      // A single large call can cross the warning line and the cap in one step, so
+      // fire the warning too rather than never at all — a coarse-grained agent
+      // (one big call per step) otherwise never sees `onApproachingCap`.
+      if (warnAt !== undefined && !e.has(BudgetWarning)) {
+        e.add(BudgetWarning, status);
+        opts?.onApproachingCap?.(status);
+      }
       // Reach the spenders too, or their Not(BudgetExceeded) guards never unmatch
-      // and a shared budget brakes only the entity holding the ledger.
+      // and a shared budget brakes only the entity holding the ledger. `add`, not
+      // `set`, so two holders sharing a spender merge through the reducer instead
+      // of raising WriteConflictError and rejecting the run.
       for (const marker of stampOn) {
         for (const spender of ctx.world.query(marker)) {
-          if (spender.id !== e.id) ctx.write(spender, BudgetExceeded, status, 'set');
+          if (spender.id !== e.id && !spender.has(BudgetExceeded)) {
+            ctx.write(spender, BudgetExceeded, status, 'add');
+          }
         }
       }
-      opts?.onExceeded?.(status);
+      if (first) opts?.onExceeded?.(status);
     },
   });
 }

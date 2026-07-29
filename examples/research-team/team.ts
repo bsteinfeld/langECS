@@ -44,9 +44,10 @@ function meteredModel(ctx: SystemCtx, board: EntityTarget, system: string): Mode
   return {
     async generate(req) {
       const result = await inner.generate(req);
-      // stdlib's `spendOf` does the reported-or-estimated arithmetic (R63).
-      const requestChars = req.messages.reduce((n, m) => n + m.content.length, 0);
-      ctx.write(board, TokenUsage, [spendOf(system, result, requestChars)], 'add');
+      // stdlib's `spendOf` does the reported-or-estimated arithmetic (R63). It
+      // takes the whole REQUEST: the prompt is usually the larger half, and the
+      // old character count omitted the system prompt and tool-call args.
+      ctx.write(board, TokenUsage, [spendOf(system, result, req)], 'add');
       return result;
     },
   };

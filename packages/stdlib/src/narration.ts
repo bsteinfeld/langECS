@@ -37,15 +37,38 @@ import {
  * nothing should: the moment a system's query depends on it, it stops being
  * narration and becomes a state machine — which is the graph framework this
  * engine exists not to be. Write it freely; read it only to display.
+ *
+ * "Free" needs the reducer below to be true. Having no scheduling role is not the
+ * same as having no effect on the run: a plain component written by two systems in
+ * one step raises `WriteConflictError` and rejects the whole run, so narration
+ * without a reducer could destroy a run precisely because it looked harmless.
  */
-export const Phase: ComponentType<string> = defineComponent<string>({ name: 'Phase' });
+export const Phase: ComponentType<string> = defineComponent<string>({
+  name: 'Phase',
+  // An explicit last-write-wins reducer, and it is load-bearing. Without one,
+  // two systems narrating the same entity in one step is a `WriteConflictError`
+  // that rejects the ENTIRE run with zero steps committed (R30) — so the
+  // "write it freely" invitation above would have been a trap. R30 forbids
+  // *silent* last-write-wins; declaring it is the sanctioned way to ask for it,
+  // and merges are ordered deterministically by (system index, entity id).
+  //
+  // This is reachable from a shipped example: support-desk asserts two systems
+  // running on one entity in one step, and adding the blessed one-line narration
+  // to both would have stopped the desk working.
+  reducer: (_current, incoming) => incoming,
+});
 
 /**
  * What this entity is ultimately trying to achieve, in one human sentence. Set
  * once at spawn and rarely changed — it is the "why" that `Phase`'s "what" hangs
  * off. Also has no scheduling role.
  */
-export const Goal: ComponentType<string> = defineComponent<string>({ name: 'Goal' });
+export const Goal: ComponentType<string> = defineComponent<string>({
+  name: 'Goal',
+  // Same reducer as `Phase`, for the same reason. Lower risk in practice (set
+  // once at spawn) but narration must never be able to reject a run.
+  reducer: (_current, incoming) => incoming,
+});
 
 /** One entity's current state, rendered for a human (R64). */
 export interface Narration {
