@@ -28,6 +28,11 @@ packages/core/src/
   trace.ts        # flight recorder, formatTrace
   builtins.ts     # SystemError, AwaitingHuman, HumanResponse, Cancelled
   cancel.ts       # throwIfAborted, abortReason, delay, anySignal (R49)
+  reducers.ts     # appendReducer, boundedAppend, mergeReducer, ... (R59)
+  event.ts        # defineEvent, EventRef (R60)
+  middleware.ts   # wrapModel, withRetry/withTimeout/withFallback/... (R61)
+  recording.ts    # recordingModel, replayModel, formatRecording (R62)
+  hash.ts         # stable ModelRequest hashing for R61/R62
   model.ts        # Msg, Model, ToolSpec, scriptedModel (no engine coupling)
   errors.ts       # WriteConflictError, WorldRunningError, UnknownComponentError, ...
 ```
@@ -75,7 +80,7 @@ packages/core/src/
   ```
   *(amended)* `when` guards receive a **restricted `GuardCtx = { step, world, resource }`** — at both the type level and at runtime. Guards can never buffer writes, spawn, despawn, invalidate, or `emit`; they are pure reads over the step-start state.
 - **R22** `ctx` (SystemCtx): `{ step: number; world: ReadView (query/entity over step-start state); spawn(...inits): EntityHandle-like (see R29); despawn(target); write(target, C, value, op?: 'add' | 'set'); remove(target, C); emit(data: unknown): void; resource<T>(name): T; invalidate(target, system?: string): void }`. `target` accepts an id, `EntityHandle`, or `EntityView`.
-- **R23** `ctx.emit(data)` pushes a `custom` event to the live run event stream immediately (mid-step). Emitted data is observation only — never stored, never snapshotted.
+- **R23** `ctx.emit(data)` pushes a `custom` event to the live run event stream immediately (mid-step). Emitted data is observation only — never stored, never snapshotted. *(amended)* A typed overload `ctx.emit(ref: EventRef<T>, payload: T)` (R60) additionally sets `RunEvent.custom.name`, so observers can filter by name instead of parsing every payload.
 - **R24** `ctx.invalidate(target, system?)` manually marks (system, entity) — or all systems for the entity — dirty for the next step. (Escape hatch; stdlib retry uses it.) *(amended)* An unknown system name rejects the run during barrier staging (boundary intact, like R30); an invalidate whose target entity does not exist at the barrier (never spawned, or despawned this step) is dropped and recorded in the trace's `droppedWrites` — phantom dirt never reaches `pendingPairs` (R35).
 
 ## 5. Step algorithm
@@ -270,6 +275,10 @@ const callLLM = defineSystem({
 | T38 | `strict: false` (R55): an unknown component is preserved and round-trips through the next snapshot; an unknown `pendingPairs` system is dropped **and reported** |
 | T39 | `expectedStep` (R57) throws `StaleSnapshotError` on a mismatch |
 | T40 | fencing (R57): two workers resume one snapshot, exactly one advances and the loser rejects with `FenceError`; `claim()` before running keeps side effects exactly-once (the save-time fence alone does not); persisted history has no interleaved timeline; an unfenced world can still rewind and rewrite (R38) |
+| T42 | standard reducers (R59): each merges as documented without mutating inputs; `boundedAppend` caps from either end; a bounded component stays bounded under concurrent same-step writes |
+| T43 | typed events (R60): a typed emit carries `name`, the untyped form does not; the ref check is a brand, so a payload with an `eventName` field is not misread |
+| T44 | middleware (R61): compose order is first-outermost; retry backs off but never retries a cancellation; retry/fallback on `stream` only before the first chunk; `withTimeout` aborts the inner call; `withCache` keys ignore `signal` and never cache a failure; `withRateLimit` caps concurrency; `stream` survives a generate-only layer; a layer after `withFallback` sees only the primary |
+| T45 | record/replay (R62): a recorded run replays exactly and order-independently; a prompt edit falls back to ordinal and `strict` refuses; entries are consumed once and results are detached; a replayed run reproduces the original trace shape |
 | T41 | `saveEvery` (R58): `'barrier'` writes once per step, `'quiescence'` once per run, `N` every N steps; no boundary is ever written twice |
 
 ## 14. Observability & introspection (devtools surface)
@@ -353,6 +362,25 @@ unloadable, with no supported answer at all.*
   - `PersistenceAdapter.fence?(worldId, step)` claims the right to write a step, and must be **monotonic per worldId**: granting a step implicitly refuses that step and every step below it. Worlds created with `{ fence: true }` call it from `claim()` and again immediately **before each save** — the moment divergence would become durable, and already an awaited async boundary — and reject the run with `FenceError` when refused. Adapters must make the check-and-claim atomic against other writers (a conditional write, a compare-and-set, `O_EXCL`); a read followed by a separate write reintroduces the race it exists to close. `MemoryAdapter` and `@langecs/persist-fs` both implement it.
   Fencing is **opt-in per world and deliberately not implied by the adapter having the method**: a time-travel world (R38) legitimately rewrites steps it has already written, and an automatic fence would refuse its own replay.
 - **R58** **Write cadence.** `createWorld({ saveEvery: 'barrier' | 'quiescence' | number })`, default `'barrier'` (every committed step — required for step-level time travel, R38). `'quiescence'` writes only at run end; a number writes every N steps. Run end always writes, at every setting, so a quiesced world is never left unpersisted — and because quiescence *is* the pause in this engine, `'quiescence'` still captures every boundary a human-in-the-loop flow resumes from. What it gives up is the intermediate steps, i.e. time travel. This matters because `snapshot()` serialises every entity's every component, so cost per step scales with total world size rather than with what changed.
+
+---
+
+## 17. Reducers, typed events, model middleware, record/replay
+
+*All four are outside engine semantics: nothing here changes scheduling, and a
+world that uses none of it behaves identically. They exist because these are the
+things every user was writing by hand.*
+
+- **R59** **Standard reducers**, exported from core because a reducer is a core concept (it is what `defineComponent({ reducer })` takes, and what `WriteConflictError` tells you to reach for): `appendReducer<T>()`, `boundedAppend<T>(max, { keep?: 'first' | 'last' })`, `mergeReducer<T>()` (shallow, incoming wins), `maxByReducer<T>(score)` (ties keep `current`, so the result cannot depend on barrier ordering), `dedupeByReducer<T>(key)` (first occurrence wins), `sumReducer()`. Type alias `Reducer<T> = (current: T, incoming: T) => T`.
+  Every one must be **pure**: reducers run in barrier staging against committed values, which are handed out by reference and must be treated as immutable (R17 amended). `boundedAppend` exists because an unbounded append on a long-lived world grows a component forever, and R35 puts every component into every snapshot — so that growth is paid on every save.
+- **R60** **Typed custom events.** `defineEvent<T>(name): EventRef<T>`, mirroring `defineResource`'s ergonomics (R18 amended): no registry, no uniqueness rule, and at runtime just a **branded** name. `ctx.emit(ref, payload)` type-checks the payload at the call site and sets `custom.name`; `ctx.emit(data)` is unchanged and leaves `name` absent. The brand matters: a structural check would misread a payload that merely has an `eventName` field as a typed emit, silently swapping the name and dropping the payload.
+- **R61** **Model middleware.** `wrapModel(model, ...middleware): Model` where `ModelMiddleware = (model: Model) => Model`, **first listed outermost** (the same convention as `wrapSystemRun`, R46). Ships `withRetry`, `withTimeout`, `withFallback`, `withRateLimit`, `withCost`, `withCache`.
+  Three rules the implementations must hold, each learned from a way this goes wrong:
+  1. **Cancellation is never retried or failed over** (R49). An aborted call means the caller asked to stop; retrying it would defeat `world.cancel()` and every `timeoutMs` above it. Backoff waits are interruptible.
+  2. **`stream` is never silently dropped.** A middleware that only wraps `generate` must pass `stream` through, or layering one turns a streaming agent into a non-streaming one — and stdlib's `callLLM` branches on exactly that, so tokens would stop appearing with no error anywhere. Conversely, retry and fallback apply to a stream **only before the first chunk**: once tokens are delivered, a second attempt duplicates them and a failover splices two different answers together.
+  3. **A layer listed after `withFallback` wraps only the primary**, because a fallback is invoked directly rather than through the layers below. Observability therefore goes outermost. This is worth stating in the spec because the intuitive order is wrong: a `withCost` written after `withFallback` reports **nothing** in precisely the case you most want measured.
+- **R62** **Record and replay.** `recordingModel(model, sink?)` captures request/result pairs from a live run (successes only — a failure has no result to replay); `replayModel(recording, opts?)` plays them back; `formatRecording` renders one readably. A `Recording` is plain JSON, so it is a checkable fixture: provider `raw` is dropped (often circular), and replayed results are detached per call so a system that mutates a returned message cannot corrupt the fixture.
+  **Matching is hash-first with an ordinal fallback**, and the combination is the design. Hash matching alone breaks on any prompt edit — the very refactor a fixture exists to let you verify — so a purely content-addressed replay would fail at its main job. Ordinal matching alone would silently align the wrong answers when concurrent pairs reorder calls (R29). So an exact hash match wins and order may vary freely; otherwise the next unconsumed entry is used and `onMismatch` fires; and `strict: true` makes that an error, which is what CI wants. Request hashing excludes `signal`: it is per-call plumbing, and including it would make every request unique.
 
 ## 13. Satellite package outlines (built after core; final design owned by their builders + reviewers)
 

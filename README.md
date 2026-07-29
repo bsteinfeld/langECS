@@ -236,6 +236,7 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 - [docs/guides/persistence-and-time-travel.md](docs/guides/persistence-and-time-travel.md) — snapshot anatomy, the adapter contract, the restore recipe, rewind-and-fork
 - [docs/guides/schema-evolution-and-resume-safety.md](docs/guides/schema-evolution-and-resume-safety.md) — **renaming a component without orphaning live worlds**: `recipeVersion` + migrations, `canLoad` as a deploy gate, `strict: false` for rolling deploys, and adapter fencing so two workers can't resume one snapshot and diverge
 - [docs/guides/streaming-and-observability.md](docs/guides/streaming-and-observability.md) — the run event stream, token streaming via `ctx.emit`, the flight recorder
+- [docs/guides/model-middleware-and-fixtures.md](docs/guides/model-middleware-and-fixtures.md) — the things everyone writes by hand: standard reducers (incl. the bounded one), typed custom events, `wrapModel` with retry/timeout/fallback/rate-limit/cost/cache, and record-and-replay of real model calls as deterministic fixtures
 
 **Background and reference**
 

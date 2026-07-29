@@ -25,6 +25,7 @@ import {
   WorldRunningError,
   WriteConflictError,
 } from './errors';
+import { isEventRef } from './event';
 import type { ChangeRecord, PairRef, Run, RunEvent, RunResult, RunStatus } from './events';
 import { RunStream } from './events';
 import type {
@@ -1506,11 +1507,25 @@ class WorldImpl implements World {
       remove: (target, component) => {
         pushOp(exec, { kind: 'remove', entity: resolveTarget(target), component });
       },
-      emit: (data) => {
+      emit: (dataOrRef: unknown, payload?: unknown) => {
         // An abandoned pair is silent (R52): its effects were discarded, so
         // letting late events through would narrate work that never happened.
         if (exec.abandoned === true) return;
-        emit({ type: 'custom', step: stepNo, system: sys.key, entity, data });
+        // Brand check, not a structural one (R60): a payload that merely has an
+        // `eventName` field must not be mistaken for a typed emit, which would
+        // silently swap the name and drop the payload.
+        if (isEventRef(dataOrRef)) {
+          emit({
+            type: 'custom',
+            step: stepNo,
+            system: sys.key,
+            entity,
+            name: dataOrRef.eventName,
+            data: payload,
+          });
+          return;
+        }
+        emit({ type: 'custom', step: stepNo, system: sys.key, entity, data: dataOrRef });
       },
       resource: <T>(nameOrRef: string | ResourceRef<T>): T => this.lookupResource(nameOrRef),
       invalidate: (target, system) => {
