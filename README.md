@@ -241,7 +241,7 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 - [docs/experiment-verdict.md](docs/experiment-verdict.md) — the aggregate verdict on the six ports: hypothesis validated, with the wins/losses pattern and what gates a release
 - [docs/prior-art.md](docs/prior-art.md) — what already exists (ArgOS, Simulation Streams, blackboard systems, Pregel, production rules, Linda, durable execution) and which claims we soften because of it
 - [DESIGN.md](DESIGN.md) — the decision record: why each piece is the way it is
-- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R49) and the required test matrix (T1–T27)
+- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R53) and the required test matrix (T1–T33)
 - [docs/naming.md](docs/naming.md) — the rename research (`langecs` is a working title)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, commands, repo conventions
 

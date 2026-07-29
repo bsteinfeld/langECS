@@ -10,7 +10,7 @@ acceptance gate.
 ## Authority order
 
 For engine semantics: **SPEC.md > DESIGN.md**. SPEC.md is the contract with numbered
-requirements (R1…R49) and the required test matrix (T1–T27); DESIGN.md records *why*.
+requirements (R1…R53) and the required test matrix (T1–T33); DESIGN.md records *why*.
 Code conforming to SPEC wins disputes. Cite requirement numbers when touching the engine.
 
 ## Commands

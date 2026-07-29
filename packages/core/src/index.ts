@@ -13,7 +13,7 @@ export {
   SystemError,
 } from './builtins';
 // Cooperative cancellation (R49): helpers for `Model`s, tools and systems that
-// honour `ModelRequest.signal`.
+// honour `ModelRequest.signal` / `ctx.signal` (R51).
 export { abortReason, anySignal, delay, throwIfAborted } from './cancel';
 export {
   type ComponentInfo,

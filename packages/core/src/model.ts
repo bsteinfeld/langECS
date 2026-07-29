@@ -57,9 +57,10 @@ export interface ModelRequest {
    * what stops a provider that ignores the signal from resolving into a
    * cancelled caller.
    *
-   * The caller owns the signal: an `AbortController` it holds, or a timeout it
-   * set around the call. Once engine-level cancellation lands, systems will
-   * receive one as `ctx.signal`. Cancellation is cooperative by construction: a
+   * Inside a system this is `ctx.signal` (R51), which fires when the world is
+   * cancelled (R50) or the system's `timeoutMs` elapses (R52); outside one, the
+   * caller owns it — an `AbortController` it holds, or a timeout it set around
+   * the call. Cancellation is cooperative by construction: a
    * model that ignores the signal cannot be interrupted, and the engine does not
    * pretend otherwise — it stops waiting for the pair, but the underlying call
    * may still be in flight.
