@@ -13,13 +13,42 @@ import type { ModelRequest } from './model';
  * this, `{ system, messages }` and `{ messages, system }` would be different
  * cache keys for the same call.
  */
-function canonical(value: unknown): string {
+const MAX_DEPTH = 200;
+
+function canonical(value: unknown, depth = 0, seen?: Set<object>): string {
+  // Non-finite numbers must not collapse into `null` the way JSON.stringify does:
+  // `maxTokens: budget / 0` (Infinity) or a parseInt mishap (NaN) would otherwise
+  // share a cache entry with an unset field. `-0` IS collapsed to `0`, which is
+  // correct — no provider distinguishes them.
+  if (typeof value === 'number' && !Number.isFinite(value)) return `#${String(value)}`;
+  if (value === undefined) return '#undefined';
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+
+  // Nothing constrains a `ModelRequest` to be acyclic or shallow: R3 governs
+  // COMPONENTS, while `tools[].parameters` is a user-supplied JSON Schema and
+  // `Msg.meta`/`toolCalls[].args` are `unknown`. Unbounded recursion here threw a
+  // RangeError from inside shared code, which made every `withCache` lookup fail
+  // and — worse — turned a model call that had already SUCCEEDED into a failure
+  // when `recordingModel` hashed it.
+  if (depth > MAX_DEPTH) return '#depth';
+  const marks = seen ?? new Set<object>();
+  if (marks.has(value as object)) return '#cycle';
+  marks.add(value as object);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => canonical(item, depth + 1, marks)).join(',')}]`;
+    }
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v, depth + 1, marks)}`)
+      .join(',')}}`;
+  } finally {
+    // Removed on the way out so sibling references to one shared object are not
+    // reported as cycles.
+    marks.delete(value as object);
+  }
 }
 
 /** FNV-1a (32-bit), rendered as 8 hex chars. Fast, dependency-free, good enough to key a map. */

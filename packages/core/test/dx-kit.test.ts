@@ -19,9 +19,11 @@ import {
   maxByReducer,
   mergeReducer,
   type Recording,
+  type RecordingEntry,
   type RunEvent,
   recordingModel,
   replayModel,
+  requestKey,
   scriptedModel,
   sumReducer,
   withCache,
@@ -64,8 +66,9 @@ test('R59 boundedAppend caps growth from the chosen end', () => {
   const first = boundedAppend<number>(3, { keep: 'first' });
   expect(first([1, 2, 3], [4])).toEqual([1, 2, 3]);
 
-  // Degenerate caps behave, rather than producing a negative slice.
-  expect(boundedAppend<number>(0)([1], [2])).toEqual([]);
+  // A degenerate cap is now rejected at factory time rather than silently
+  // discarding everything (or, for NaN, silently becoming unbounded).
+  expect(() => boundedAppend<number>(0)).toThrow(/positive integer cap/);
 });
 
 test('R59 a bounded component stays bounded across many concurrent writes', async () => {
@@ -603,22 +606,23 @@ test('R62 replay is exhaustible, entries are consumed once, and results are deta
 });
 
 test('R62 a recorded stream replays re-chunked, and the sink sees progress', async () => {
-  const captured: Recording[] = [];
+  const captured: RecordingEntry[] = [];
   const recorder = recordingModel(
     scriptedModel([{ role: 'assistant', content: 'streamed answer' }]),
-    (r) => captured.push(r),
+    (entry) => captured.push(entry),
   );
   const req = { messages: [{ role: 'user' as const, content: 'q' }] };
   const live: string[] = [];
   await recorder.stream?.(req, (d) => {
     if (d.text !== undefined) live.push(d.text);
   });
-  // The sink fires per captured call, so a crashed run still leaves a fixture.
+  // The sink fires per captured ENTRY, so a crashed run still leaves a fixture
+  // without re-serialising everything captured so far on every call.
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.entries[0]?.via).toBe('stream');
+  expect(captured[0]?.via).toBe('stream');
 
   const replayed: string[] = [];
-  const result = await replayModel(captured[0] as Recording).stream?.(req, (d) => {
+  const result = await replayModel(recorder.recording()).stream?.(req, (d) => {
     if (d.text !== undefined) replayed.push(d.text);
   });
   expect(result?.message.content).toBe('streamed answer');
@@ -687,4 +691,257 @@ test('R62 replay drives a real world, so a recorded run becomes a regression tes
   expect(replayed.world.getTrace().map((s) => s.runs.map((r) => r.system))).toEqual(
     live.world.getTrace().map((s) => s.runs.map((r) => r.system)),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from the adversarial review of PR #4. Each failed against the
+// code as first merged; none was caught by the existing suite.
+// ---------------------------------------------------------------------------
+
+test('R62 a hash match never strands an earlier entry for the ordinal fallback', async () => {
+  const recorder = recordingModel(
+    scriptedModel([
+      { role: 'assistant', content: 'ans-for-turn-A' },
+      { role: 'assistant', content: 'ans-for-turn-B' },
+    ]),
+  );
+  const reqFor = (text: string): ModelRequest => ({ messages: [{ role: 'user', content: text }] });
+  await recorder.generate(reqFor('turn-A'));
+  await recorder.generate(reqFor('turn-B'));
+  const recording = recorder.recording();
+
+  // The commonest prompt refactor there is: a leading turn is deleted, so call 1
+  // now sends what call 2 used to send. Scanning the whole array let call 1
+  // consume entry 2 by hash, after which the ordinal fallback handed call 2 the
+  // FIRST answer — the answers were silently swapped, and `onMismatch` never
+  // fired for call 1, so `strict` could not catch it either.
+  const out: string[] = [];
+  const reorders: { position: number; expectedPosition: number }[] = [];
+  const mismatches: number[] = [];
+  const replay = replayModel(recording, {
+    onOutOfOrder: (i) =>
+      reorders.push({ position: i.position, expectedPosition: i.expectedPosition }),
+    onMismatch: (i) => mismatches.push(i.index),
+  });
+  out.push((await replay.generate(reqFor('turn-B'))).message.content);
+  out.push((await replay.generate(reqFor('turn-C'))).message.content);
+
+  // The real defect was SILENCE on call 1: a hash match reached past entry 0,
+  // consumed entry 1, and reported nothing — so `strict` could not catch it and
+  // the ordinal fallback then handed call 2 the earlier answer. The fix is that
+  // an out-of-order resolution is always reported.
+  expect(reorders).toEqual([{ position: 1, expectedPosition: 0 }]);
+  expect(mismatches).toEqual([0]);
+  // And strict mode now refuses rather than swapping quietly.
+  const strict = replayModel(recording, { strict: true });
+  await strict.generate(reqFor('turn-B'));
+  await expect(strict.generate(reqFor('turn-C'))).rejects.toThrow(/drifted from this fixture/);
+  expect(out).toHaveLength(2);
+});
+
+test('R62 consumption is keyed on position, so a merged fixture stays fully reachable', async () => {
+  const one = recordingModel(scriptedModel([{ role: 'assistant', content: 'ans-A' }]));
+  const two = recordingModel(scriptedModel([{ role: 'assistant', content: 'ans-B' }]));
+  const reqA: ModelRequest = { messages: [{ role: 'user', content: 'a' }] };
+  const reqB: ModelRequest = { messages: [{ role: 'user', content: 'b' }] };
+  await one.generate(reqA);
+  await two.generate(reqB);
+
+  // Concatenating two recordings — which the per-entry sink invites — gives two
+  // entries both carrying index 0. Keying `consumed` on `entry.index` marked both
+  // at once, so half the fixture was unreachable behind an error blaming the
+  // recording.
+  const merged: Recording = {
+    version: 1,
+    entries: [...one.recording().entries, ...two.recording().entries],
+  };
+  const replay = replayModel(merged);
+  expect((await replay.generate(reqA)).message.content).toBe('ans-A');
+  expect((await replay.generate(reqB)).message.content).toBe('ans-B');
+});
+
+test('R62 replayModel only streams when the fixture actually recorded a stream', async () => {
+  const generateOnly: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: 'no streaming here' } }),
+  };
+  const recorder = recordingModel(generateOnly);
+  expect(recorder.stream).toBeUndefined();
+  await recorder.generate({ messages: [] });
+
+  // `via` was recorded faithfully and then ignored, so a test asserting "this
+  // model emits no token events" passed live and failed open against the fixture.
+  expect(replayModel(recorder.recording()).stream).toBeUndefined();
+});
+
+test('R61 withFallback does not fabricate a stream on a non-streaming primary', async () => {
+  const primary: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: 'primary' } }),
+  };
+  const backup = scriptedModel([{ role: 'assistant', content: 'backup' }]);
+  // stdlib's callLLM branches on `stream`'s presence, so a fabricated one that
+  // emitted zero chunks made every token printer go silently blank.
+  expect(wrapModel(primary, withFallback(backup)).stream).toBeUndefined();
+
+  // A non-streaming FALLBACK behind a streaming primary still delivers its text.
+  const failing: Model = {
+    generate: async () => {
+      throw new Error('down');
+    },
+    stream: async () => {
+      throw new Error('down');
+    },
+  };
+  const chunks: string[] = [];
+  const result = await wrapModel(failing, withFallback(primary)).stream?.({ messages: [] }, (d) => {
+    if (d.text !== undefined) chunks.push(d.text);
+  });
+  expect(result?.message.content).toBe('primary');
+  expect(chunks.join('')).toBe('primary');
+});
+
+test('R61 withTimeout outside withFallback bounds the whole chain, not each attempt', async () => {
+  const hang: Model = {
+    generate: async (req) => {
+      await delay(60_000, req.signal);
+      return { message: { role: 'assistant', content: 'never' } };
+    },
+  };
+  const quick = scriptedModel([{ role: 'assistant', content: 'from the backup' }]);
+  // The intuitive reading — "give the primary 20ms, then try the small one" —
+  // does NOT hold, and cannot: the deadline aborts the signal the whole chain
+  // shares, so there is no budget left to spend on a fallback. It fails, and the
+  // error names the deadline rather than masquerading as an operator cancel.
+  await expect(
+    wrapModel(hang, withTimeout(20), withFallback(quick)).generate({ messages: [] }),
+  ).rejects.toThrow(/exceeded its 20ms timeout/);
+
+  // The construction that DOES give each attempt its own budget puts the timeout
+  // per model, inside the fallback.
+  const perAttempt = await wrapModel(
+    wrapModel(hang, withTimeout(20)),
+    withFallback(quick),
+  ).generate({ messages: [] });
+  expect(perAttempt.message.content).toBe('from the backup');
+
+  // An operator cancel still must NOT fail over.
+  const controller = new AbortController();
+  const pending = wrapModel(hang, withFallback(quick)).generate({
+    messages: [],
+    signal: controller.signal,
+  });
+  controller.abort(new Error('user stopped'));
+  await expect(pending).rejects.toThrow('user stopped');
+});
+
+test('R61 withRateLimit spaces CONCURRENT calls, and never stalls the first one', async () => {
+  const starts: number[] = [];
+  const base: Model = {
+    generate: async () => {
+      starts.push(Date.now());
+      return { message: { role: 'assistant', content: 'ok' } };
+    },
+  };
+  // A large interval must not delay the very first call: `now()` is
+  // performance.now(), so a zero baseline made call one sleep `interval - uptime`.
+  const first = wrapModel(base, withRateLimit({ minIntervalMs: 3_000 }));
+  const t0 = Date.now();
+  await first.generate({ messages: [] });
+  expect(Date.now() - t0).toBeLessThan(500);
+
+  // Every concurrent caller read `lastStart` before any wrote it, so they all
+  // computed the same deadline and fired together — with the default unlimited
+  // concurrency a fan-out step got no pacing at all.
+  starts.length = 0;
+  const spaced = wrapModel(base, withRateLimit({ minIntervalMs: 25 }));
+  await Promise.all(Array.from({ length: 4 }, () => spaced.generate({ messages: [] })));
+  const offsets = starts.map((t) => t - (starts[0] ?? 0)).sort((a, b) => a - b);
+  expect(offsets[3]).toBeGreaterThanOrEqual(60);
+});
+
+test('R61 withCache hands out detached results, so a consumer cannot poison it', async () => {
+  let calls = 0;
+  const base: Model = {
+    generate: async () => {
+      calls += 1;
+      return { message: { role: 'assistant', content: 'pristine' } };
+    },
+  };
+  const model = wrapModel(base, withCache());
+  const req: ModelRequest = { messages: [{ role: 'user', content: 'q' }] };
+
+  const first = await model.generate(req);
+  // stdlib does `e.add(Messages, [result.message])`, so a shared object becomes
+  // committed component state aliased by every entity that got this answer.
+  first.message.content = 'MUTATED BY A CONSUMER';
+  expect((await model.generate(req)).message.content).toBe('pristine');
+  expect(calls).toBe(1);
+});
+
+test('R61 a throwing withCost sink does not fail a successful call', async () => {
+  const base: Model = {
+    generate: async () => ({
+      message: { role: 'assistant', content: 'ok' },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }),
+  };
+  // A ledger that throws on overflow is plausible under R63, and would otherwise
+  // turn billing bookkeeping into SystemError on entities that did nothing wrong.
+  const model = wrapModel(
+    base,
+    withCost(() => {
+      throw new Error('ledger over budget');
+    }),
+  );
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'ok' },
+  });
+});
+
+test('R59 boundedAppend rejects a cap that would silently unbound or empty it', () => {
+  // NaN made `merged.length <= NaN` false and the slice return everything, so the
+  // one reducer whose purpose is bounding growth became unbounded.
+  expect(() => boundedAppend<number>(Number.NaN)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(0)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(-3)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(2.5)).toThrow(/positive integer cap/);
+  expect(boundedAppend<number>(2)([1], [2, 3])).toEqual([2, 3]);
+});
+
+test('R61/R62 hashing survives a cyclic or very deep request', async () => {
+  const cyclic: Record<string, unknown> = { type: 'object' };
+  cyclic.self = cyclic;
+  const req: ModelRequest = { messages: [], tools: [{ name: 't', parameters: cyclic }] };
+  // `tools[].parameters` is a user-supplied JSON Schema, so a $ref-style
+  // back-reference is ordinary. Unbounded recursion made every cache lookup throw
+  // a RangeError — and turned a model call that had SUCCEEDED into a failure when
+  // recordingModel hashed it on the success path.
+  expect(() => hashRequest(req)).not.toThrow();
+
+  let deep: Record<string, unknown> = {};
+  const root = deep;
+  for (let i = 0; i < 5_000; i++) {
+    const next: Record<string, unknown> = {};
+    deep.next = next;
+    deep = next;
+  }
+  expect(() =>
+    hashRequest({ messages: [], tools: [{ name: 'd', parameters: root }] }),
+  ).not.toThrow();
+
+  // And a recording still returns the model's result even when hashing struggles.
+  const recorder = recordingModel(scriptedModel([{ role: 'assistant', content: 'survived' }]));
+  await expect(recorder.generate(req)).resolves.toMatchObject({
+    message: { content: 'survived' },
+  });
+});
+
+test('R61 canonical keys distinguish non-finite numbers from null', () => {
+  const base = { messages: [] as never[] };
+  const nan = requestKey({ ...base, temperature: Number.NaN });
+  const inf = requestKey({ ...base, temperature: Number.POSITIVE_INFINITY });
+  const unset = requestKey(base);
+  // `maxTokens: budget / 0` shared a cache entry with an unset field.
+  expect(new Set([nan, inf, unset]).size).toBe(3);
+  // -0 and 0 SHOULD collapse: no provider distinguishes them.
+  expect(requestKey({ ...base, temperature: -0 })).toBe(requestKey({ ...base, temperature: 0 }));
 });

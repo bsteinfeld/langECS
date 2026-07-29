@@ -19,7 +19,7 @@
 // case you most want to measure. Verified against a real failing provider.
 
 import { abortReason, delay, throwIfAborted } from './cancel';
-import { hashRequest } from './hash';
+import { requestKey } from './hash';
 import type { Model, ModelRequest, ModelResult } from './model';
 
 /** One layer of model middleware (R61): takes a `Model`, returns a `Model`. */
@@ -70,11 +70,36 @@ function withStreamPassthrough(
   return out;
 }
 
-/** True for the errors cancellation produces, which must never be retried (R49). */
+/**
+ * True for the errors an operator cancellation produces, which must never be
+ * retried or failed over (R49).
+ *
+ * A `withTimeout` DEADLINE is deliberately excluded. Because `withTimeout` hands
+ * the layers below a derived signal, a `signal.aborted` test alone made a
+ * deadline indistinguishable from a cancel — so `wrapModel(big, withTimeout(60),
+ * withFallback(small))`, which reads as "give the primary 60ms then try the small
+ * one", short-circuited on the first iteration and never called the fallback. A
+ * deadline SHOULD fail over; only an operator stop should not.
+ */
 function isCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted === true) return true;
   const name = (err as { name?: unknown } | null)?.name;
+  if (name === TIMEOUT_ERROR_NAME) return false;
+  if (signal?.aborted === true) {
+    // The signal may have been aborted BY a deadline below us.
+    const reason = (signal as { reason?: { name?: unknown } }).reason;
+    return reason?.name !== TIMEOUT_ERROR_NAME;
+  }
   return name === 'AbortError' || name === 'CancelledError';
+}
+
+/** Marks a `withTimeout` expiry so `isCancellation` can tell it from an operator stop. */
+const TIMEOUT_ERROR_NAME = 'ModelTimeoutError';
+
+/** The error a `withTimeout` deadline aborts with (R61). */
+function timeoutError(ms: number): Error {
+  const err = new Error(`Model call exceeded its ${ms}ms timeout.`);
+  err.name = TIMEOUT_ERROR_NAME;
+  return err;
 }
 
 export interface RetryOptions {
@@ -160,8 +185,27 @@ export function withRetry(opts: RetryOptions): ModelMiddleware {
  * Composes with `ctx.signal`: the inner call receives a signal that aborts on
  * either this deadline or the caller's cancellation, so the provider request is
  * genuinely abandoned rather than merely un-awaited. Distinct from a system
- * `timeoutMs` (R52), which bounds a whole pair — this bounds one model call, so
- * `withRetry(withTimeout(...))` can give each attempt its own budget.
+ * `timeoutMs` (R52), which bounds a whole pair — this bounds one model call.
+ *
+ * **It bounds the whole chain below it, not each attempt.** The signal it derives
+ * is shared by every layer underneath, so once the deadline fires there is no
+ * budget left for a retry or a fallback to spend:
+ *
+ * ```ts
+ * // Bounds the WHOLE thing at 20ms. The fallback never gets to run, because
+ * // the deadline has already spent the budget the chain shares.
+ * wrapModel(big, withTimeout(20), withFallback(small))
+ *
+ * // Gives each attempt its own budget — wrap the models, not the chain.
+ * wrapModel(wrapModel(big, withTimeout(20)), withFallback(small))
+ * ```
+ *
+ * Note this is the OPPOSITE arrangement from `withCost`, which wants to be
+ * outermost. Observability goes outside; deadlines go inside.
+ *
+ * A deadline is also reported distinguishably (`name: 'ModelTimeoutError'`) so it
+ * is never mistaken for an operator cancellation in a log or a `retryOn`
+ * predicate.
  */
 export function withTimeout(ms: number): ModelMiddleware {
   return (inner) => {
@@ -170,10 +214,7 @@ export function withTimeout(ms: number): ModelMiddleware {
       const controller = new AbortController();
       const onOuterAbort = (): void => controller.abort(abortReason(req.signal as AbortSignal));
       req.signal?.addEventListener('abort', onOuterAbort, { once: true });
-      const timer = timers.setTimeout(
-        () => controller.abort(new Error(`Model call exceeded its ${ms}ms timeout.`)),
-        ms,
-      );
+      const timer = timers.setTimeout(() => controller.abort(timeoutError(ms)), ms);
       try {
         return await call({ ...req, signal: controller.signal });
       } finally {
@@ -236,27 +277,44 @@ export function withFallback(...fallbacks: Model[]): ModelMiddleware {
         }
         throw lastError;
       },
-      stream: async (req, onChunk) => {
-        let lastError: unknown;
-        for (const model of chain) {
-          throwIfAborted(req.signal);
-          let emitted = false;
-          try {
-            const streamFn = model.stream;
-            if (streamFn === undefined) return await model.generate(req);
-            return await streamFn.call(model, req, (chunk) => {
-              emitted = true;
-              onChunk(chunk);
-            });
-          } catch (err) {
-            if (isCancellation(err, req.signal)) throw err;
-            // Half-streamed: failing over would splice two answers together.
-            if (emitted) throw err;
-            lastError = err;
-          }
-        }
-        throw lastError;
-      },
+      // Defined ONLY when the primary streams. Passing it unconditionally
+      // fabricated a `stream` on a non-streaming model, and the fabricated one
+      // emitted zero chunks — stdlib's `callLLM` branches on `stream`'s presence,
+      // so it took the streaming path and produced no token events at all, with
+      // no error anywhere. That is exactly what R61 rule 2 forbids.
+      ...(inner.stream === undefined
+        ? {}
+        : {
+            stream: async (req: ModelRequest, onChunk: (d: { text?: string }) => void) => {
+              let lastError: unknown;
+              for (const model of chain) {
+                throwIfAborted(req.signal);
+                let emitted = false;
+                try {
+                  const streamFn = model.stream;
+                  if (streamFn === undefined) {
+                    // A non-streaming FALLBACK still has to deliver its text, so
+                    // forward it as one chunk the way `withCache` does.
+                    const result = await model.generate(req);
+                    if (result.message.content.length > 0) {
+                      onChunk({ text: result.message.content });
+                    }
+                    return result;
+                  }
+                  return await streamFn.call(model, req, (chunk) => {
+                    emitted = true;
+                    onChunk(chunk);
+                  });
+                } catch (err) {
+                  if (isCancellation(err, req.signal)) throw err;
+                  // Half-streamed: failing over would splice two answers together.
+                  if (emitted) throw err;
+                  lastError = err;
+                }
+              }
+              throw lastError;
+            },
+          }),
     });
   };
 }
@@ -279,7 +337,10 @@ export interface RateLimitOptions {
 export function withRateLimit(opts: RateLimitOptions): ModelMiddleware {
   const minIntervalMs = opts.minIntervalMs ?? 0;
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? Number.MAX_SAFE_INTEGER));
-  let lastStart = 0;
+  // NEGATIVE_INFINITY, not 0: `now()` is `performance.now()` (ms since process
+  // start), so a zero baseline made the FIRST call sleep `minIntervalMs - uptime`
+  // — a 3s quota-derived interval stalled the first model call for ~2.6s.
+  let lastStart = Number.NEGATIVE_INFINITY;
   let active = 0;
   const waiting: (() => void)[] = [];
 
@@ -325,11 +386,19 @@ export function withRateLimit(opts: RateLimitOptions): ModelMiddleware {
         // and taking it would swallow the baton, and every remaining queued call
         // would hang forever with nothing left to wake it.
         throwIfAborted(req.signal);
-        const since = now() - lastStart;
-        if (minIntervalMs > 0 && since < minIntervalMs) {
-          await delay(minIntervalMs - since, req.signal);
+        if (minIntervalMs > 0) {
+          // The slot is RESERVED synchronously, before yielding. Reading
+          // `lastStart` and writing it after the sleep gave every concurrent
+          // caller the same deadline, so they all fired together — with the
+          // default unlimited concurrency, a fan-out step got no pacing at all,
+          // which is the documented use ("derive from a per-minute quota").
+          const startAt = Math.max(now(), lastStart + minIntervalMs);
+          lastStart = startAt;
+          const wait = startAt - now();
+          if (wait > 0) await delay(wait, req.signal);
+        } else {
+          lastStart = now();
         }
-        lastStart = now();
         return await call();
       } finally {
         release();
@@ -375,7 +444,18 @@ export function withCost(sink: (report: UsageReport) => void): ModelMiddleware {
       if (usage === undefined) return;
       const entry: UsageReport = { usage, ms: now() - startedAt };
       if (result.finishReason !== undefined) entry.finishReason = result.finishReason;
-      sink(entry);
+      try {
+        sink(entry);
+      } catch (err) {
+        // Isolated the way R45 isolates observer callbacks: this is bookkeeping
+        // ABOUT a call, so a ledger that throws on overflow must not turn a
+        // successful model call into a `SystemError` on an entity that did
+        // nothing wrong.
+        (globalThis as { console?: { error?: (...a: unknown[]) => void } }).console?.error?.(
+          '[langecs] withCost sink threw (ignored):',
+          err,
+        );
+      }
     };
     return withStreamPassthrough(inner, {
       generate: async (req) => {
@@ -403,8 +483,15 @@ export interface CacheOptions {
   store?: Map<string, ModelResult>;
   /** Entry lifetime; unset means forever (for the process). */
   ttlMs?: number;
-  /** Override the cache key. Default: a stable hash of the request minus `signal`. */
+  /**
+   * Override the cache key. Default: the **exact** canonical form of the request
+   * minus `signal` — not a digest. A 32-bit digest collision would silently serve
+   * a different prompt's answer, which is close to unfalsifiable in production;
+   * string keys are exact and hash internally anyway.
+   */
   key?: (req: ModelRequest) => string;
+  /** Cap on entries; the oldest is evicted past it. Unset means unbounded. */
+  maxEntries?: number;
 }
 
 /**
@@ -421,22 +508,43 @@ export interface CacheOptions {
 export function withCache(opts?: CacheOptions): ModelMiddleware {
   const store = opts?.store ?? new Map<string, ModelResult>();
   const stamps = new Map<string, number>();
-  const keyOf = opts?.key ?? hashRequest;
+  const keyOf = opts?.key ?? requestKey;
   const ttlMs = opts?.ttlMs;
+  const maxEntries = opts?.maxEntries;
 
   const read = (key: string): ModelResult | undefined => {
     const hit = store.get(key);
-    if (hit === undefined) return undefined;
+    if (hit === undefined) {
+      // A caller-supplied bounded/LRU store evicts on its own, so prune the
+      // parallel stamps map on any miss or it grows without bound beside it.
+      stamps.delete(key);
+      return undefined;
+    }
     if (ttlMs !== undefined && now() - (stamps.get(key) ?? 0) > ttlMs) {
       store.delete(key);
       stamps.delete(key);
       return undefined;
     }
-    return hit;
+    // Detached per hit. Handing every consumer the SAME object let one mutation
+    // poison the cache for everyone — and stdlib does `e.add(Messages, [result
+    // .message])`, so the cached `Msg` becomes committed component state, aliased
+    // by every entity that ever got this answer. `replayModel` detaches for
+    // exactly this reason; the cache needs it more.
+    return JSON.parse(JSON.stringify(hit)) as ModelResult;
   };
   const write = (key: string, result: ModelResult): void => {
-    store.set(key, result);
+    // Stored detached as well as read detached: the miss path returns the model's
+    // own object to the caller, so storing that same reference let the FIRST
+    // consumer poison every later hit.
+    store.set(key, JSON.parse(JSON.stringify(result)) as ModelResult);
     stamps.set(key, now());
+    if (maxEntries !== undefined && store.size > maxEntries) {
+      const oldest = store.keys().next();
+      if (oldest.done !== true) {
+        store.delete(oldest.value);
+        stamps.delete(oldest.value);
+      }
+    }
   };
 
   return (inner) =>
