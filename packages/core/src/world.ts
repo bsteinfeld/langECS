@@ -1272,6 +1272,18 @@ class WorldImpl implements World {
           'give a false sense of exclusivity.',
       );
     }
+    // Staleness is checked BEFORE the fence, because the fence alone cannot catch
+    // it. A monotonic fence refuses a step at or below one already claimed — but a
+    // worker resuming an OLDER snapshot claims a LOWER step, and if it gets there
+    // first nothing has been claimed yet, so it is granted. It would then only be
+    // refused at its first save, by which time its side effects have run: exactly
+    // the failure `claim()` exists to prevent, one boundary further out.
+    //
+    // The adapter already knows the answer, and this costs one read per resume.
+    const latest = await adapter.load(this.id);
+    if (latest !== null && latest.step > this.stepCount) {
+      throw new StaleSnapshotError(this.stepCount, latest.step);
+    }
     const granted = await adapter.fence(this.id, this.stepCount);
     if (!granted) throw new FenceError(this.id, this.stepCount);
   }
