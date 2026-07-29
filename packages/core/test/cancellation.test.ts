@@ -20,6 +20,7 @@ import {
   SystemError,
   scriptedModel,
   throwIfAborted,
+  type World,
 } from '../src/index';
 
 const Job = defineComponent<{ label: string }>({ name: 'cancel.Job' });
@@ -75,8 +76,13 @@ test('R50 a cancelled run reports cancelled even when a pair also failed for ano
   // stopped this" from "it broke" — the aborted call itself throws.
   expect(result.status).toBe('cancelled');
   expect(world.entity(job.id)?.has(SystemError)).toBe(false);
-  // A reason is optional; the record still carries the boundary step.
-  expect(world.entity(job.id)?.get(Cancelled)).toEqual({ step: 0 });
+  // A reason is optional. `step` is the boundary the stamp LANDED at, not the
+  // step that was in flight when `cancel()` was called — the record documents
+  // itself that way, and it previously pinned the pre-cancel value.
+  // Step 1 committed (the aborted pair recorded nothing), then the cancellation
+  // boundary committed as step 2 — it changes state, so it advances the counter.
+  expect(world.entity(job.id)?.get(Cancelled)).toEqual({ step: 2 });
+  expect(world.step).toBe(2);
 });
 
 test('R50 cancel is state: it survives a snapshot round-trip and lifts when removed', async () => {
@@ -315,4 +321,207 @@ test('R52 timeouts and cancellation compose: cancel stops waiting on a signal-ig
   // status and stamped the state.
   expect(result.status).toBe('cancelled');
   expect(world.entity(job.id)?.get(Cancelled)).toMatchObject({ reason: 'stop now' });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from the adversarial review of the shipped cancellation work.
+// Each failed against the code as first merged.
+// ---------------------------------------------------------------------------
+
+test('R50/R31 a concurrent cancel does not swallow a genuine unrelated failure', async () => {
+  const Broken = defineComponent<number>({ name: 'cancel.Broken' });
+  const buggy = defineSystem({
+    name: 'buggy',
+    query: [Broken],
+    run: () => {
+      throw new TypeError('a real production bug');
+    },
+  });
+  const world = createWorld();
+  world.use(buggy);
+  world.use(slowGuarded);
+  const broken = world.spawn(Broken(1));
+  const job = world.spawn(Job({ label: 'slow' }));
+
+  const run = world.run();
+  world.cancel('operator stopped');
+  const result = await run;
+
+  expect(result.status).toBe('cancelled');
+  // The suppression is attributed per PAIR by error identity. A run-wide
+  // "was the run cancelled?" test made ANY failure landing after the cancel
+  // invisible — no ErrorRecord, dirt consumed, and the only trace in a ring
+  // buffer that `load` clears. A production bug vanished because someone
+  // clicked Stop in the same step.
+  const records = world.entity(broken.id)?.get(SystemError) ?? [];
+  expect(records.map((r) => r.error.name)).toEqual(['TypeError']);
+  expect(records[0]?.error.message).toBe('a real production bug');
+  // The cancelled pair still records nothing, which is the intended asymmetry.
+  expect(world.entity(job.id)?.has(SystemError)).toBe(false);
+});
+
+test('R50 a guard-less system interrupted by a cancel keeps its dirt and resumes', async () => {
+  // Blessed by R50: a system without Not(Cancelled) "keeps matching after a
+  // cancel, by design". It honours ctx.signal, so the cancel interrupts it.
+  const Waiting = defineTag('cancel.Waiting');
+  const calls: number[] = [];
+  const chat = defineSystem({
+    name: 'chat',
+    query: [Job, Waiting],
+    run: async (e, ctx) => {
+      calls.push(ctx.step);
+      await delay(60_000, ctx.signal);
+      e.remove(Waiting);
+    },
+  });
+  const world = createWorld();
+  world.use(chat);
+  const job = world.spawn(Job({ label: 'chat' }), Waiting());
+
+  const run = world.run();
+  world.cancel('stop');
+  expect((await run).status).toBe('cancelled');
+
+  // Consuming the dirt too left no writes, no error and nothing scheduled: the
+  // entity was permanently wedged with zero diagnostics.
+  expect(world.snapshot().pendingPairs.map((p) => p.system)).toContain('chat');
+
+  // So un-cancelling really does resume it, which is what R50 promises.
+  world.entity(job.id)?.remove(Cancelled);
+  const resumed = world.run();
+  world.cancel('and stop again');
+  await resumed;
+  // Step 1 ran, step 2 was the cancellation boundary, step 3 is the resumed pair.
+  expect(calls).toEqual([1, 3]);
+});
+
+test('R28 a stale Cancelled on one entity does not mask error or pending', async () => {
+  const Broken = defineComponent<number>({ name: 'cancel.Broken2' });
+  const boom = defineSystem({
+    name: 'boom2',
+    query: [Broken, Not(Cancelled)],
+    run: () => {
+      throw new Error('real production bug');
+    },
+  });
+  const world = createWorld();
+  world.use(boom);
+
+  // One unrelated entity is cancelled and never cleaned up...
+  const stale = world.spawn(Job({ label: 'old' }));
+  world.cancel('an earlier stop');
+  expect(world.entity(stale.id)?.has(Cancelled)).toBe(true);
+
+  // ...then real work arrives and fails.
+  const broken = world.spawn(Broken(1));
+  const result = await world.run();
+
+  // `Cancelled` has no engine clearing path, so a world-wide status check made
+  // ONE stale carrier hide every later error, interrupt and limit — forever.
+  expect(result.status).toBe('error');
+  expect(world.entity(broken.id)?.get(SystemError)?.[0]?.error.message).toBe('real production bug');
+  // The zero-step case still reports cancelled, so a reloaded cancelled world is
+  // not silently reported as idle.
+  const quiet = createWorld();
+  quiet.use(slowGuarded);
+  quiet.spawn(Job({ label: 'x' }));
+  quiet.cancel('stopped');
+  expect((await quiet.run()).status).toBe('cancelled');
+});
+
+test('R52 an abandoned pair never advances the entity-id counter', async () => {
+  let release: (() => void) | undefined;
+  const zombie = defineSystem({
+    name: 'zombie',
+    query: [Job],
+    timeoutMs: 5,
+    run: async (_e, ctx) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // Runs long after the barrier abandoned this pair.
+      for (let i = 0; i < 5; i++) ctx.spawn(Job({ label: `ghost-${i}` }));
+    },
+  });
+  const world = createWorld();
+  world.use(zombie);
+  world.spawn(Job({ label: 'host' }));
+
+  await world.run();
+  const idAfterRun = world.snapshot().nextEntityId;
+
+  release?.();
+  await delay(10);
+  // `nextEntityId` is committed state in every snapshot, so a zombie moving it
+  // after the run ended made ids from a later run interleave with it — and a
+  // loop in an abandoned system would grow it without bound.
+  expect(world.snapshot().nextEntityId).toBe(idAfterRun);
+  expect(world.query(Job)).toHaveLength(1);
+});
+
+test('R53 runningPairs keeps reporting a pair that was abandoned but is still running', async () => {
+  let release: (() => void) | undefined;
+  const hang = defineSystem({
+    name: 'hangVisible',
+    query: [Job],
+    timeoutMs: 5,
+    run: async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+  });
+  const world = createWorld();
+  world.use(hang);
+  world.spawn(Job({ label: 'stuck' }));
+
+  await world.run();
+  // The one case an operator reaches for runningPairs() is a system hung badly
+  // enough to be abandoned; clearing on the race made exactly that invisible.
+  const stillRunning = world.runningPairs();
+  expect(stillRunning.map((p) => p.system)).toEqual(['hangVisible']);
+  expect(stillRunning[0]?.abandoned).toBe(true);
+
+  release?.();
+  await delay(10);
+  expect(world.runningPairs()).toEqual([]);
+});
+
+test('R50 a cancel landing during the run-end save is honoured, not dropped', async () => {
+  // `world.running` is still true while the run-end save awaits, so `cancel()`
+  // takes the mid-run branch — and nothing read it: status was computed first and
+  // the next run reset the flag. It returned void and left no trace, so a UI
+  // gating its Cancel button on `world.running` showed a live control that did
+  // nothing. With a real fs/S3/Postgres adapter the window is seconds.
+  // A one-step run saves twice: once at the barrier, once at run end. The barrier
+  // save is fine — the loop continues and honours the cancel. The RUN-END save is
+  // the hole, so fire on the second save.
+  let saves = 0;
+  let world: World;
+  const slowAdapter = {
+    async save() {
+      saves += 1;
+      if (saves === 2) world.cancel('stopped while saving');
+      await delay(20);
+    },
+    load: () => null,
+  };
+  const bump = defineSystem({
+    name: 'bump',
+    query: [Job, Not(Done)],
+    run: (e) => {
+      e.add(Done);
+    },
+  });
+  world = createWorld({ persistence: slowAdapter });
+  world.use(bump);
+  const job = world.spawn(Job({ label: 'a' }));
+
+  const result = await world.run();
+  expect(saves).toBeGreaterThanOrEqual(2);
+
+  expect(result.status).toBe('cancelled');
+  expect(world.entity(job.id)?.get(Cancelled)).toMatchObject({
+    reason: 'stopped while saving',
+  });
 });
