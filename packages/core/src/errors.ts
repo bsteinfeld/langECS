@@ -157,6 +157,28 @@ export class MissingResourceError extends LangECSError {
   }
 }
 
+/**
+ * Thrown when work is abandoned because its `AbortSignal` fired (R49) — a
+ * cancelled world (R50) or an elapsed system timeout (R52).
+ *
+ * Cooperative cancellation prefers re-throwing the signal's own `reason` (on
+ * platforms that populate it, that is a `DOMException` named `AbortError`);
+ * this exists for implementations with no platform reason to hand back, and so
+ * core stays isomorphic without assuming `DOMException` (R1).
+ */
+export class CancelledError extends LangECSError {
+  /** Why the abort happened, when the canceller supplied one. */
+  readonly reason: unknown;
+
+  constructor(reason?: unknown) {
+    const detail =
+      reason === undefined ? '' : `: ${reason instanceof Error ? reason.message : String(reason)}`;
+    super(`Operation cancelled${detail}.`);
+    this.name = 'CancelledError';
+    this.reason = reason;
+  }
+}
+
 /** Thrown when an external mutation targets an entity that does not exist. */
 export class UnknownEntityError extends LangECSError {
   readonly entity: number;

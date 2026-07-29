@@ -135,6 +135,57 @@ describe('fromAiSdk generate()', () => {
     expect(call.stopSequences).toEqual(['STOP']);
   });
 
+  test('R49 forwards req.signal to the provider call as abortSignal', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    const controller = new AbortController();
+    await model.generate({
+      messages: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    // Cancellation has to reach the transport, not just the awaiting engine:
+    // the SDK aborts the HTTP request from this signal.
+    expect(mock.doGenerateCalls[0]?.abortSignal).toBe(controller.signal);
+  });
+
+  test('R49 an aborted signal rejects the call', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'never delivered' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      model.generate({ messages: [{ role: 'user', content: 'hi' }], signal: controller.signal }),
+    ).rejects.toThrow();
+  });
+
+  test('R49 omits abortSignal entirely when req.signal is unset', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    await model.generate({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(mock.doGenerateCalls[0]?.abortSignal).toBeUndefined();
+  });
+
   test('maps reasoning content to Msg.thinking', async () => {
     const mock = new MockLanguageModelV3({
       doGenerate: {

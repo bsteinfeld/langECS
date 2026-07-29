@@ -21,6 +21,8 @@ import { fromLangChain } from '../src/index';
 /** Minimal scripted chat model that records every `_generate` input. */
 class CapturingChatModel extends BaseChatModel {
   received: BaseMessage[][] = [];
+  /** Parsed call options per invocation — how `signal` forwarding is asserted (R49). */
+  receivedOptions: { signal?: AbortSignal }[] = [];
   boundTools: BindToolsInput[] | undefined;
   private readonly responses: AIMessage[];
   private i = 0;
@@ -39,8 +41,12 @@ class CapturingChatModel extends BaseChatModel {
     return this;
   }
 
-  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+  async _generate(
+    messages: BaseMessage[],
+    options?: { signal?: AbortSignal },
+  ): Promise<ChatResult> {
     this.received.push(messages);
+    this.receivedOptions.push({ ...(options ?? {}) });
     const message = this.responses[this.i];
     if (message === undefined) throw new Error('CapturingChatModel: out of scripted responses');
     this.i += 1;
@@ -187,5 +193,42 @@ describe('fromLangChain · stream', () => {
 
     expect(chunks).toEqual(['no streaming here']);
     expect(result?.message.content).toBe('no streaming here');
+  });
+});
+
+describe('fromLangChain · cancellation (R49)', () => {
+  it('forwards req.signal as the call-time signal option', async () => {
+    const lc = new CapturingChatModel([new AIMessage('done')]);
+    const controller = new AbortController();
+    await fromLangChain(lc).generate({ ...userReq('hi'), signal: controller.signal });
+    // Unlike the sampling knobs, `signal` IS a portable call-time option, so it
+    // reaches the provider request rather than being dropped.
+    expect(lc.receivedOptions[0]?.signal).toBe(controller.signal);
+  });
+
+  it('omits the option entirely when no signal is supplied', async () => {
+    const lc = new CapturingChatModel([new AIMessage('done')]);
+    await fromLangChain(lc).generate(userReq('hi'));
+    expect(lc.receivedOptions[0]?.signal).toBeUndefined();
+  });
+
+  it('rejects an already-aborted request without calling the model', async () => {
+    const lc = new CapturingChatModel([new AIMessage('never delivered')]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      fromLangChain(lc).generate({ ...userReq('hi'), signal: controller.signal }),
+    ).rejects.toThrow();
+    expect(lc.received).toEqual([]);
+  });
+
+  it('rejects an already-aborted stream without calling the model', async () => {
+    const lc = new CapturingChatModel([new AIMessage('never delivered')]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      fromLangChain(lc).stream?.({ ...userReq('hi'), signal: controller.signal }, () => {}),
+    ).rejects.toThrow();
+    expect(lc.received).toEqual([]);
   });
 });

@@ -194,16 +194,26 @@ const callLLM = defineSystem({
   ```ts
   type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string;
                toolCalls?: { id: string; name: string; args: unknown }[];
-               toolCallId?: string; name?: string; meta?: Record<string, unknown> }
+               toolCallId?: string; name?: string;
+               thinking?: string;                       // reasoning text, output-only, never sent back
+               meta?: Record<string, unknown> }
   type ToolSpec = { name: string; description?: string; parameters?: Record<string, unknown> /* JSON Schema */ }
   interface ModelRequest { messages: Msg[]; system?: string; tools?: ToolSpec[];
-                           temperature?: number; maxTokens?: number }
+                           temperature?: number; maxTokens?: number;
+                           // sampling controls: forwarded by adapters only when set
+                           topP?: number; topK?: number;
+                           frequencyPenalty?: number; presencePenalty?: number;
+                           seed?: number; stopSequences?: string[];
+                           signal?: AbortSignal }       // cooperative cancellation (R49)
   interface ModelResult { message: Msg; usage?: { inputTokens?: number; outputTokens?: number };
                           finishReason?: string; raw?: unknown }
   interface Model { generate(req: ModelRequest): Promise<ModelResult>;
                     stream?(req: ModelRequest, onChunk: (d: { text?: string }) => void): Promise<ModelResult> }
   ```
-- **R44** `scriptedModel(turns: (Msg | ((req: ModelRequest) => Msg))[])` → deterministic `Model` for tests: returns turns in order (supports `stream` by chunking content); throws if called more times than scripted. Exported from core.
+- **R44** `scriptedModel(turns, opts?)` → deterministic `Model` for tests: returns turns in order (supports `stream` by chunking content); throws if called more times than scripted. Exported from core.
+  `turns: (Msg | ((req: ModelRequest) => Msg | Promise<Msg>))[]` — a turn function may return a promise, so a test can script a *slow* or never-settling call (the deterministic way to exercise R49 cancellation and R52 timeouts with zero network). `opts?: { delayMs?: number }` delays every turn by `delayMs`, interruptibly.
+  *(amended)* `scriptedModel` **honours `req.signal`** (R49): an already-aborted signal rejects without consuming a turn (so the script stays aligned for the next call), and an abort during a `delayMs` wait rejects at that moment.
+- **R49** **Cooperative cancellation.** `ModelRequest.signal?: AbortSignal`. The contract for a custom `Model`: check the signal before starting work, forward it to the underlying transport (`fetch`, SDK client), and reject — rather than resolve — when it aborts. Rejecting with the signal's own `reason` is preferred; core exports `CancelledError` (and `throwIfAborted(signal)`) for implementations that have no platform reason to re-throw. Cancellation is cooperative by construction: a `Model` that ignores the signal cannot be interrupted, and the engine never pretends otherwise. Both shipped adapters forward it (`@langecs/ai-sdk` → `abortSignal`, `@langecs/langchain` → the call's `signal` option).
 
 ## 12. Required test matrix (deterministic, zero network)
 

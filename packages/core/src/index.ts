@@ -10,6 +10,9 @@ export {
   interrupt,
   SystemError,
 } from './builtins';
+// Cooperative cancellation (R49): helpers for `Model`s, tools and systems that
+// honour `ctx.signal`.
+export { abortReason, anySignal, delay, throwIfAborted } from './cancel';
 export {
   type ComponentInfo,
   type ComponentInit,
@@ -25,6 +28,7 @@ export {
   type TagType,
 } from './component';
 export {
+  CancelledError,
   DeserializeError,
   DuplicateComponentError,
   DuplicateSystemError,
@@ -51,6 +55,8 @@ export {
   type ModelRequest,
   type ModelResult,
   type Msg,
+  type ScriptedModelOptions,
+  type ScriptedTurn,
   scriptedModel,
   type ToolSpec,
 } from './model';
