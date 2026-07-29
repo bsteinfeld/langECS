@@ -1,15 +1,18 @@
 import type { AgentDef } from './agent';
 import { isAgentDef } from './agent';
-import type { ErrorRecord, InterruptRecord } from './builtins';
-import { AwaitingHuman, HumanResponse, SystemError } from './builtins';
+import type { CancellationRecord, ErrorRecord, InterruptRecord } from './builtins';
+import { AwaitingHuman, Cancelled, HumanResponse, SystemError } from './builtins';
+import { anySignal } from './cancel';
 import type { ComponentInit, ComponentType, QueryTerm } from './component';
 import { getComponentByName, isComponentType } from './component';
 import {
+  CancelledError,
   DeserializeError,
   DuplicateSystemError,
   MissingResourceError,
   type SerializedError,
   SnapshotVersionError,
+  SystemTimeoutError,
   serializeError,
   UnknownComponentError,
   UnknownEntityError,
@@ -46,6 +49,13 @@ import type { DroppedWrite, StepTrace, TraceRun } from './trace';
 const perf = (globalThis as { performance?: { now(): number } }).performance;
 const now: () => number = perf ? () => perf.now() : () => Date.now();
 
+// Timers via `globalThis` rather than a type library, like `performance` above
+// (R1). Used only for system timeouts (R52).
+const timers = globalThis as unknown as {
+  setTimeout(cb: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+
 // `console` is allowed but not assumed (R1): observer faults are reported,
 // never thrown (R45), and a console-less runtime just drops the report.
 // Resolved at call time so test spies and runtime console swaps are honored.
@@ -74,6 +84,25 @@ export interface WorldOptions {
   persistence?: PersistenceAdapter;
   recursionLimit?: number;
   trace?: boolean | { keep?: number };
+  /**
+   * Default wall-clock budget for every system execution (R52), overridden
+   * per system by `defineSystem({ timeoutMs })`. Unset means no timeout, which
+   * is the historical behavior: one system that never settles hangs the barrier
+   * forever. Set it on any world whose systems make network calls.
+   */
+  systemTimeoutMs?: number;
+}
+
+/** One pair executing right now, as reported by `world.runningPairs()` (R53). */
+export interface RunningPair {
+  system: string;
+  entity: number;
+  /** Step the pair is executing in. */
+  step: number;
+  /** Milliseconds elapsed since the pair's `run` was invoked. */
+  elapsedMs: number;
+  /** Effective timeout for this pair, when one applies (R52). */
+  timeoutMs?: number;
 }
 
 export interface World {
@@ -143,6 +172,35 @@ export interface World {
    * touches component state (R28).
    */
   pending(): { entity: number; interrupts: InterruptRecord[] }[];
+  /**
+   * Cancels the world (R50): aborts every in-flight pair's `ctx.signal` and
+   * stamps `Cancelled({ step, reason })` on every entity, so systems carrying
+   * the conventional `Not(Cancelled)` guard stop matching.
+   *
+   * Unlike every other external mutation (R16) this is legal **mid-run** —
+   * being able to stop a run in flight is the entire point, and it never
+   * mutates component state from outside a barrier: mid-run the stamp is an
+   * engine write at the next step boundary, so the trace and every snapshot
+   * stay boundary-consistent. Idle, it applies immediately like any other
+   * external write.
+   *
+   * Cancellation is **cooperative**. The engine stops *waiting* for a pair only
+   * when that pair has a `timeoutMs` (R52); otherwise it aborts `ctx.signal`
+   * and a system that ignores the signal still runs to completion, with its
+   * writes committing normally. For a hard bound, combine this with
+   * `timeoutMs`.
+   *
+   * Because the state *is* the cancellation, it survives snapshot/load, and
+   * removing `Cancelled` from the entities un-cancels the world.
+   */
+  cancel(reason?: string): void;
+  /**
+   * Pairs executing right now, in scheduling order (R53) — the complement of
+   * `systems()` ("what could run") and `systemsMatching()` ("what could run for
+   * this entity"): this is what *is* running, and for how long. Empty unless a
+   * run is in flight. Safe to call mid-run, including from an observer.
+   */
+  runningPairs(): RunningPair[];
   /**
    * Answers a human-in-the-loop interrupt (R33): removes `AwaitingHuman`
    * entirely, sets `HumanResponse({ value })`, then runs to quiescence.
@@ -242,6 +300,25 @@ interface PairExec {
   view: EntityView<any>;
   error?: SerializedError;
   ms: number;
+  /**
+   * Set when the pair's `timeoutMs` expired (R52). The barrier stops waiting
+   * for it, and every subsequent buffered op is refused — an abandoned pair that
+   * keeps running can never land a write, which is what makes the discarded
+   * buffer of R31 hold for timeouts as well as throws.
+   */
+  abandoned?: boolean;
+  /** True when this pair's failure was a timeout rather than a throw (R52). */
+  timedOut?: boolean;
+  /**
+   * True when the pair failed because the world was cancelled (R50). Such a
+   * failure is deliberately NOT recorded as `SystemError`: an ErrorRecord would
+   * invite a retry system to re-arm work the operator just stopped.
+   */
+  abortedByCancel?: boolean;
+  /** Aborts this pair's `ctx.signal` on timeout, independently of its siblings. */
+  timeoutController?: AbortController;
+  /** Effective timeout, resolved from the system then the world default (R52). */
+  timeoutMs?: number;
 }
 
 interface AttributedChange {
@@ -258,6 +335,21 @@ interface BarrierOutcome {
 }
 
 const pairId = (systemKey: string, entity: number): string => `${systemKey}::${entity}`;
+
+/**
+ * Buffers one op for a pair, unless the pair was abandoned on timeout (R52).
+ *
+ * The refusal is the load-bearing half of the timeout design. When the barrier
+ * stops waiting for a pair, that pair's `run` may still be executing — and it
+ * still holds `ctx` and its entity view. Without this guard it could push writes
+ * into the buffer after the buffer was discarded, and they would commit at a
+ * barrier the system was no longer part of. R31's "discard the buffer entirely"
+ * then would not actually hold for timeouts, only for throws.
+ */
+const pushOp = (exec: PairExec, op: BufferOp): void => {
+  if (exec.abandoned === true) return;
+  exec.ops.push(op);
+};
 
 /** The single snapshot format this build reads and writes (R35/R36). */
 const SNAPSHOT_VERSION = 1;
@@ -286,11 +378,24 @@ class WorldImpl implements World {
   private traceBuf: StepTrace[] = [];
   private runCounter = 0;
   private readonly observers: WorldObserver[] = [];
+  private readonly systemTimeoutMs: number | undefined;
+  /** Aborted by `cancel()` during a run; every pair's `ctx.signal` follows it (R50/R51). */
+  private runCancel: AbortController | undefined;
+  /** Cancellation requested during the current run but not yet stamped (R50). */
+  private pendingCancel: CancellationRecord | undefined;
+  /** True once `cancel()` was seen by the current run — reported even with no entities to stamp. */
+  private cancelSeen = false;
+  /** In-flight pairs for `runningPairs()` (R53), keyed by pair id. */
+  private readonly inFlight = new Map<
+    string,
+    { system: string; entity: number; step: number; startedAt: number; timeoutMs?: number }
+  >();
 
   constructor(opts?: WorldOptions) {
     this.id = opts?.id ?? 'world';
     this.persistence = opts?.persistence;
     this.recursionLimit = opts?.recursionLimit ?? 50;
+    this.systemTimeoutMs = opts?.systemTimeoutMs;
     const trace = opts?.trace;
     this.traceKeep =
       trace === false ? 0 : trace === true || trace === undefined ? 1000 : (trace.keep ?? 1000);
@@ -714,6 +819,12 @@ class WorldImpl implements World {
   run(opts?: { limit?: number }): Run {
     if (this.runInFlight) throw new WorldRunningError('start a second run');
     this.runInFlight = true;
+    // Fresh per run (R50/R51): every pair's `ctx.signal` derives from this, and
+    // a cancellation never leaks into a later run — removing `Cancelled` from
+    // the entities is all it takes to un-cancel the world.
+    this.runCancel = new AbortController();
+    this.pendingCancel = undefined;
+    this.cancelSeen = false;
     const runId = `${this.id}:run-${++this.runCounter}`;
     const stream = new RunStream();
     // Every stream emission also reaches observers (R45) — a passive tap,
@@ -726,11 +837,13 @@ class WorldImpl implements World {
     this.driveLoop(emit, opts?.limit ?? this.recursionLimit, runId).then(
       (result) => {
         this.runInFlight = false;
+        this.inFlight.clear();
         emit({ type: 'run:end', status: result.status, steps: result.steps });
         stream.resolve(result);
       },
       (err) => {
         this.runInFlight = false;
+        this.inFlight.clear();
         // A rejected run emits no run:end (R40); observers get the
         // observer-only run:reject instead (R45) so they can close out.
         this.notifyEvent({ type: 'run:reject', error: serializeError(err) }, runId);
@@ -753,6 +866,71 @@ class WorldImpl implements World {
     return this.run();
   }
 
+  // ------------------------------------------------------------ cancellation
+
+  cancel(reason?: string): void {
+    const record: CancellationRecord = { step: this.stepCount };
+    if (reason !== undefined) record.reason = reason;
+
+    if (!this.runInFlight) {
+      // Idle: an ordinary external write, immediate like every other one (R16).
+      this.stampCancelled(record, 'external');
+      return;
+    }
+    // Mid-run: abort every pair's signal now, and let the run loop stamp the
+    // component at the next step boundary (R50). Stamping from here would mutate
+    // committed state from outside a barrier, which is exactly what R16 exists to
+    // prevent — a snapshot taken mid-step would no longer be boundary-consistent.
+    this.cancelSeen = true;
+    this.pendingCancel = record;
+    this.runCancel?.abort(new CancelledError(reason));
+  }
+
+  /** Whether any entity currently carries `Cancelled` — cancellation is state (R50). */
+  private hasCancelled(): boolean {
+    for (const comps of this.entities.values()) {
+      if (comps.has(Cancelled.componentName)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Writes `Cancelled` to every entity and refreshes dirt (R50). Returns the
+   * changes so the caller can trace and emit them; the idle path notifies
+   * observers per write instead, like any external mutation (R48).
+   */
+  private stampCancelled(record: CancellationRecord, writer: string): AttributedChange[] {
+    const changes: AttributedChange[] = [];
+    for (const id of this.sortedEntityIds()) {
+      this.commitWrite(id, Cancelled, deepClone(record), 'set', writer, changes);
+    }
+    this.refreshDirt(changes);
+    if (writer === 'external') {
+      for (const change of changes) {
+        this.notifyExternal({
+          kind: 'write',
+          entity: change.record.entity,
+          component: Cancelled.componentName,
+        });
+      }
+    }
+    return changes;
+  }
+
+  runningPairs(): RunningPair[] {
+    const at = now();
+    return [...this.inFlight.values()].map((info) => {
+      const pair: RunningPair = {
+        system: info.system,
+        entity: info.entity,
+        step: info.step,
+        elapsedMs: at - info.startedAt,
+      };
+      if (info.timeoutMs !== undefined) pair.timeoutMs = info.timeoutMs;
+      return pair;
+    });
+  }
+
   private async driveLoop(
     emit: (event: RunEvent) => void,
     limit: number,
@@ -763,6 +941,31 @@ class WorldImpl implements World {
 
     while (true) {
       const stepNo = this.stepCount + 1;
+
+      // 0. Cancellation requested mid-step (R50). Stamped here, at a step
+      // boundary, rather than inside `cancel()` — mutating committed state from
+      // outside a barrier is exactly what R16 forbids, and a snapshot taken
+      // mid-step would no longer be boundary-consistent. The step counter does
+      // NOT advance: like a fully-vetoed iteration, this is a boundary event, so
+      // it is recorded in the trace with no runs and the run ends.
+      const cancellation = this.pendingCancel;
+      if (cancellation !== undefined) {
+        this.pendingCancel = undefined;
+        const changes = this.stampCancelled(cancellation, 'engine');
+        const applied = changes.map((c) => c.record);
+        this.pushTrace({
+          step: stepNo,
+          scheduled: [],
+          vetoed: [],
+          runs: [],
+          applied,
+          spawned: [],
+          despawned: [],
+          durationMs: 0,
+        });
+        emit({ type: 'step:applied', step: stepNo, changes: applied, spawned: [], despawned: [] });
+        break;
+      }
 
       // 1. Candidates: matched ∩ dirty, in (system registration index, entity id) order.
       const candidates: { sys: RegisteredSystem; entity: number }[] = [];
@@ -841,79 +1044,7 @@ class WorldImpl implements World {
         scheduled: execs.map((x) => ({ system: x.sys.key, entity: x.entity })),
       });
       const stepStart = now();
-      await Promise.all(
-        execs.map(async (exec) => {
-          if (exec.error) {
-            // `when` already threw; report it like a failed run — with the
-            // system:start/system:error pairing intact (R41 amended).
-            emit({
-              type: 'system:start',
-              step: stepNo,
-              system: exec.sys.key,
-              entity: exec.entity,
-            });
-            emit({
-              type: 'system:error',
-              step: stepNo,
-              system: exec.sys.key,
-              entity: exec.entity,
-              error: exec.error,
-            });
-            return;
-          }
-          emit({
-            type: 'system:start',
-            step: stepNo,
-            system: exec.sys.key,
-            entity: exec.entity,
-          });
-          const start = now();
-          // The system's own failure is tracked out-of-band so a misbehaving
-          // wrapper that SWALLOWS fn's rejection (violating R46) can never
-          // turn a throwing system into a success — which would commit a
-          // partial buffer (R31) and bogusly auto-clear SystemError (R32).
-          let ownFailure = false;
-          let ownError: unknown;
-          try {
-            // Observer middleware around the pair's run (R46); an async-only
-            // thunk so a synchronously-throwing system still surfaces as a
-            // rejection to wrappers. A wrapper rejection lands here like a
-            // system throw (R31).
-            await this.wrapPairRun(
-              { worldId: this.id, runId, step: stepNo, system: exec.sys.key, entity: exec.entity },
-              async () => {
-                try {
-                  await exec.sys.def.run(exec.view, exec.ctx);
-                } catch (err) {
-                  ownFailure = true;
-                  ownError = err;
-                  throw err;
-                }
-              },
-            );
-            if (ownFailure) throw ownError;
-            exec.ms = now() - start;
-            emit({
-              type: 'system:end',
-              step: stepNo,
-              system: exec.sys.key,
-              entity: exec.entity,
-              ms: exec.ms,
-            });
-          } catch (err) {
-            exec.ms = now() - start;
-            exec.error = serializeError(err);
-            exec.ops = []; // discard the buffer entirely (R31)
-            emit({
-              type: 'system:error',
-              step: stepNo,
-              system: exec.sys.key,
-              entity: exec.entity,
-              error: exec.error,
-            });
-          }
-        }),
-      );
+      await Promise.all(execs.map((exec) => this.executePair(exec, stepNo, runId, emit)));
 
       // 5. Barrier — two-phase (R25 amended). Staging may throw
       // (WriteConflictError, unknown invalidate system, a throwing reducer, a
@@ -959,17 +1090,148 @@ class WorldImpl implements World {
       if (this.persistence) await this.persistence.save(this.snapshot());
     }
 
-    const status: RunStatus = limitHit
-      ? 'limit'
-      : steps === 0
-        ? 'idle'
-        : this.collectErrors().length > 0
-          ? 'error'
-          : this.pending().length > 0
-            ? 'pending'
-            : 'done';
+    // Status precedence (R28 amended). `'cancelled'` outranks everything: it is
+    // read from state (any entity carrying `Cancelled`) exactly the way
+    // `'error'` and `'pending'` are, plus a flag so a cancel still reports even
+    // when there were no entities to stamp. It has to come first — otherwise a
+    // cancelled run whose aborted calls also left errors behind would report
+    // `'error'`, and the caller could not tell "I stopped this" from "it broke".
+    const status: RunStatus =
+      this.cancelSeen || this.hasCancelled()
+        ? 'cancelled'
+        : limitHit
+          ? 'limit'
+          : steps === 0
+            ? 'idle'
+            : this.collectErrors().length > 0
+              ? 'error'
+              : this.pending().length > 0
+                ? 'pending'
+                : 'done';
     if (this.persistence) await this.persistence.save(this.snapshot());
     return { status, steps, pending: this.pending(), errors: this.collectErrors() };
+  }
+
+  // -------------------------------------------------------- pair execution
+
+  /**
+   * Runs one pair, bounded by its timeout (R52).
+   *
+   * The timeout races the pair's execution rather than wrapping it, because the
+   * point is to stop *waiting*: when the deadline wins, this resolves and the
+   * barrier proceeds without the abandoned pair, which is the escape from R25
+   * step 5's `Promise.all` hanging forever on one system that never settles.
+   * The abandoned promise keeps running — cancellation is cooperative (R49) —
+   * but it can no longer affect anything: its buffer is discarded, further ops
+   * are refused (`pushOp`), and its `ctx.signal` is aborted so a well-behaved
+   * call unwinds on its own.
+   */
+  private async executePair(
+    exec: PairExec,
+    stepNo: number,
+    runId: string,
+    emit: (event: RunEvent) => void,
+  ): Promise<void> {
+    const info = { step: stepNo, system: exec.sys.key, entity: exec.entity } as const;
+    if (exec.error) {
+      // `when` already threw; report it like a failed run — with the
+      // system:start/system:error pairing intact (R41 amended).
+      emit({ type: 'system:start', ...info });
+      emit({ type: 'system:error', ...info, error: exec.error });
+      return;
+    }
+    emit({ type: 'system:start', ...info });
+
+    const key = pairId(exec.sys.key, exec.entity);
+    const start = now();
+    const tracked: {
+      system: string;
+      entity: number;
+      step: number;
+      startedAt: number;
+      timeoutMs?: number;
+    } = { system: exec.sys.key, entity: exec.entity, step: stepNo, startedAt: start };
+    if (exec.timeoutMs !== undefined) tracked.timeoutMs = exec.timeoutMs;
+    this.inFlight.set(key, tracked);
+
+    // Whichever of body/deadline lands first wins outright; the loser is inert.
+    let settled = false;
+    let timer: unknown;
+
+    const body = (async () => {
+      // The system's own failure is tracked out-of-band so a misbehaving
+      // wrapper that SWALLOWS fn's rejection (violating R46) can never
+      // turn a throwing system into a success — which would commit a
+      // partial buffer (R31) and bogusly auto-clear SystemError (R32).
+      let ownFailure = false;
+      let ownError: unknown;
+      try {
+        // Observer middleware around the pair's run (R46); an async-only
+        // thunk so a synchronously-throwing system still surfaces as a
+        // rejection to wrappers. A wrapper rejection lands here like a
+        // system throw (R31).
+        await this.wrapPairRun(
+          { worldId: this.id, runId, step: stepNo, system: exec.sys.key, entity: exec.entity },
+          async () => {
+            try {
+              await exec.sys.def.run(exec.view, exec.ctx);
+            } catch (err) {
+              ownFailure = true;
+              ownError = err;
+              throw err;
+            }
+          },
+        );
+        if (ownFailure) throw ownError;
+        if (settled) return; // abandoned on timeout: a late success changes nothing
+        settled = true;
+        exec.ms = now() - start;
+        emit({ type: 'system:end', ...info, ms: exec.ms });
+      } catch (err) {
+        if (settled) return; // ditto for a late failure
+        settled = true;
+        exec.ms = now() - start;
+        exec.error = serializeError(err);
+        exec.ops = []; // discard the buffer entirely (R31)
+        // A failure caused by cancellation is NOT recorded as SystemError
+        // (R50): the run is being abandoned deliberately, and an ErrorRecord
+        // would invite the stdlib `retry` system to re-arm the very work that
+        // was just cancelled.
+        if (this.runCancel?.signal.aborted === true && exec.timedOut !== true) {
+          exec.abortedByCancel = true;
+        }
+        emit({ type: 'system:error', ...info, error: exec.error });
+      }
+    })();
+
+    const timeoutMs = exec.timeoutMs;
+    const deadline =
+      timeoutMs === undefined
+        ? undefined
+        : new Promise<void>((resolve) => {
+            timer = timers.setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              exec.abandoned = true;
+              exec.timedOut = true;
+              exec.ops = []; // R31's discarded buffer, for a hang instead of a throw
+              const err = new SystemTimeoutError(exec.sys.key, exec.entity, timeoutMs);
+              exec.error = serializeError(err);
+              exec.ms = now() - start;
+              // Aborts only THIS pair's signal — a sibling's slowness must never
+              // cancel a healthy pair (R51).
+              exec.timeoutController?.abort(err);
+              emit({ type: 'system:error', ...info, error: exec.error });
+              resolve();
+            }, timeoutMs);
+          });
+
+    // `body` never rejects (it catches everything), but guard anyway: an
+    // unhandled rejection from an abandoned pair would crash the host process.
+    body.catch(() => {});
+    await (deadline === undefined ? body : Promise.race([body, deadline]));
+    if (timer !== undefined) timers.clearTimeout(timer);
+    this.inFlight.delete(key);
   }
 
   // ------------------------------------------------------------ pair context
@@ -1012,32 +1274,46 @@ class WorldImpl implements World {
   ): PairExec {
     const ops: BufferOp[] = [];
     const exec = { sys, entity, ops, ms: 0 } as PairExec;
+    const timeoutMs = sys.def.timeoutMs ?? this.systemTimeoutMs;
+    if (timeoutMs !== undefined) {
+      exec.timeoutMs = timeoutMs;
+      exec.timeoutController = new AbortController();
+    }
+    // Per (pair, step) signal (R51): follows the run-wide cancellation signal
+    // and this pair's own deadline — never a sibling's.
+    const signal =
+      anySignal([this.runCancel?.signal, exec.timeoutController?.signal]) ??
+      new AbortController().signal;
     const ctx: SystemCtx = {
       step: stepNo,
       world: this.worldReadView(),
+      signal,
       spawn: (...items) => {
         // Id allocated eagerly (R29); components materialize at the barrier.
         const id = this.nextEntityId++;
-        exec.ops.push({ kind: 'spawn', entity: id, items });
+        pushOp(exec, { kind: 'spawn', entity: id, items });
         return this.bufferedView(id, exec);
       },
       despawn: (target) => {
-        exec.ops.push({ kind: 'despawn', entity: resolveTarget(target) });
+        pushOp(exec, { kind: 'despawn', entity: resolveTarget(target) });
       },
       write: (target, component, value, op = 'add') => {
-        exec.ops.push({ kind: 'write', entity: resolveTarget(target), component, value, op });
+        pushOp(exec, { kind: 'write', entity: resolveTarget(target), component, value, op });
       },
       remove: (target, component) => {
-        exec.ops.push({ kind: 'remove', entity: resolveTarget(target), component });
+        pushOp(exec, { kind: 'remove', entity: resolveTarget(target), component });
       },
       emit: (data) => {
+        // An abandoned pair is silent (R52): its effects were discarded, so
+        // letting late events through would narrate work that never happened.
+        if (exec.abandoned === true) return;
         emit({ type: 'custom', step: stepNo, system: sys.key, entity, data });
       },
       resource: <T>(nameOrRef: string | ResourceRef<T>): T => this.lookupResource(nameOrRef),
       invalidate: (target, system) => {
         const op: BufferOp = { kind: 'invalidate', entity: resolveTarget(target) };
         if (system !== undefined) op.system = system;
-        exec.ops.push(op);
+        pushOp(exec, op);
       },
     };
     exec.ctx = ctx;
@@ -1053,7 +1329,7 @@ class WorldImpl implements World {
       get: (c) => this.entities.get(id)?.get(c.componentName) as never,
       components: () => [...(this.entities.get(id)?.keys() ?? [])],
       add: (c: ComponentType<any>, value?: unknown) =>
-        exec.ops.push({
+        pushOp(exec, {
           kind: 'write',
           entity: id,
           component: c,
@@ -1061,15 +1337,15 @@ class WorldImpl implements World {
           op: 'add',
         }),
       set: (c: ComponentType<any>, value?: unknown) =>
-        exec.ops.push({
+        pushOp(exec, {
           kind: 'write',
           entity: id,
           component: c,
           value: value === undefined ? true : value,
           op: 'set',
         }),
-      remove: (c) => exec.ops.push({ kind: 'remove', entity: id, component: c }),
-      despawn: () => exec.ops.push({ kind: 'despawn', entity: id }),
+      remove: (c) => pushOp(exec, { kind: 'remove', entity: id, component: c }),
+      despawn: () => pushOp(exec, { kind: 'despawn', entity: id }),
     };
   }
 
@@ -1298,6 +1574,11 @@ class WorldImpl implements World {
     const seName = SystemError.componentName;
     for (const exec of ordered) {
       if (!exec.error) continue;
+      // Cancellation is not failure (R50): a pair whose call was aborted because
+      // the operator cancelled the world gets no ErrorRecord, so the run reports
+      // 'cancelled' rather than 'error' and no retry system re-arms it. A
+      // TIMEOUT is different and does record (R52) — that one is meant to heal.
+      if (exec.abortedByCancel === true) continue;
       if (despawnSet.has(exec.entity) || !exists(exec.entity)) continue;
       const record: ErrorRecord = { system: exec.sys.key, step: stepNo, error: exec.error };
       const current = stagedLookup(exec.entity, seName);

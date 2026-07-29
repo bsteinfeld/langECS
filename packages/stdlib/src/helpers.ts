@@ -104,6 +104,13 @@ export async function ask(world: World, agent: EntityTarget, text: string): Prom
           'createWorld({ recursionLimit }) or world.run({ limit }) (default 50); otherwise a ' +
           'system cycle is failing to quiesce — world.getTrace() shows which pairs kept re-firing.',
       );
+    case 'cancelled':
+      throw new Error(
+        "ask() was cancelled: the world carries Cancelled (status 'cancelled'), so the standard " +
+          'Not(Cancelled) guard on callLLM/executeTools stopped the turn. This is the expected ' +
+          'outcome of world.cancel(...) — no answer is coming. Remove the Cancelled component ' +
+          'from the entities to un-cancel the world, then send again.',
+      );
     case 'idle':
       throw new Error(
         "ask() got no answer: the run scheduled zero steps (status 'idle') — no registered " +

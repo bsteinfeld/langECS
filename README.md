@@ -230,6 +230,7 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 - [docs/guides/debugging-systems.md](docs/guides/debugging-systems.md) — **"why didn't my system fire?"**: read the flight recorder and introspection (`systemsMatching`, `queryStats`) to make emergent control flow legible — the five things that trip people up, each with the trace that reveals it
 - [docs/guides/structured-output.md](docs/guides/structured-output.md) — typed data out of an LLM: `extractJson` with a validate hook (Zod/Valibot), `routeJson` for type-safe dispatch, and reasoning content (`Msg.thinking`)
 - [docs/guides/errors-and-retries.md](docs/guides/errors-and-retries.md) — failure as queryable state: `SystemError`, retry and healing systems, barrier rejections
+- [docs/guides/cancellation-and-timeouts.md](docs/guides/cancellation-and-timeouts.md) — stopping work already in flight: `world.cancel()` and the `Cancelled` component, cooperative `ctx.signal`, per-system `timeoutMs` as the escape from a hung barrier, `runningPairs()`
 - [docs/guides/human-in-the-loop.md](docs/guides/human-in-the-loop.md) — pause-by-quiescence: `AwaitingHuman`, `resume()`, approval flows that survive process death
 - [docs/guides/multi-agent.md](docs/guides/multi-agent.md) — supervisor/worker fan-out, `Inbox` fan-in, runtime agent spawning, writer↔critic cycles
 - [docs/guides/persistence-and-time-travel.md](docs/guides/persistence-and-time-travel.md) — snapshot anatomy, the adapter contract, the restore recipe, rewind-and-fork

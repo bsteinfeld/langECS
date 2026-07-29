@@ -3,6 +3,7 @@
 
 import {
   AwaitingHuman,
+  Cancelled,
   defineSystem,
   type EntityReadView,
   type GuardCtx,
@@ -62,14 +63,17 @@ function parseApproval(value: unknown): { approved: boolean; reason?: string } {
  *   `executeTools` appends tool results to `Messages` (foreign dirt), which
  *   re-fires this system — the canonical LLM→tools→LLM cycle.
  * - A no-tool-call reply removes `MessageWaiting`: quiescence, answer delivered.
+ * - Carries the standard `Not(Cancelled)` guard (R50) and forwards `ctx.signal`
+ *   into the request (R49/R51), so `world.cancel()` and `timeoutMs` both reach
+ *   the provider call rather than merely stopping the wait.
  */
 export const callLLM = defineSystem({
   name: 'callLLM',
-  query: [Messages, ModelRef, MessageWaiting],
+  query: [Messages, ModelRef, MessageWaiting, Not(Cancelled)],
   when: (e) => e.get(Messages).length > 0,
   run: async (e, ctx) => {
     const model = ctx.resource<Model>(e.get(ModelRef));
-    const req: ModelRequest = { messages: e.get(Messages) };
+    const req: ModelRequest = { messages: e.get(Messages), signal: ctx.signal };
     const system = e.get(SystemPrompt);
     if (system !== undefined) req.system = system;
     const toolNames = e.get(Tools);
@@ -109,7 +113,7 @@ export const callLLM = defineSystem({
  */
 export const toolApproval = defineSystem({
   name: 'toolApproval',
-  query: [PendingToolCalls, Tools],
+  query: [PendingToolCalls, Tools, Not(Cancelled)],
   when: (e, ctx) =>
     !e.has(AwaitingHuman) && !e.has(HumanResponse) && approvalNeeded(e, ctx).length > 0,
   run: (e, ctx) => {
@@ -132,7 +136,7 @@ export const toolApproval = defineSystem({
  */
 export const executeTools = defineSystem({
   name: 'executeTools',
-  query: [PendingToolCalls, Tools, Not(AwaitingHuman)],
+  query: [PendingToolCalls, Tools, Not(AwaitingHuman), Not(Cancelled)],
   when: (e, ctx) => approvalNeeded(e, ctx).length === 0 || e.has(HumanResponse),
   run: async (e, ctx) => {
     const calls = e.get(PendingToolCalls);
@@ -163,7 +167,9 @@ export const executeTools = defineSystem({
         continue;
       }
       try {
-        const output = await tool.execute(call.args);
+        // The pair's signal reaches the tool (R51), so a cancelled world or an
+        // elapsed timeout can stop an in-flight tool call too, not just a model call.
+        const output = await tool.execute(call.args, { signal: ctx.signal });
         base.content = typeof output === 'string' ? output : (JSON.stringify(output) ?? '');
       } catch (err) {
         base.content = `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -187,10 +193,14 @@ export const executeTools = defineSystem({
  * (R24) to re-fire the failing pair; `attempts > max` → give up, leaving the run
  * quiescent with status `'error'`. A retried success auto-clears its records,
  * which either unmatches this system or re-fires it for the remaining failures.
+ *
+ * Carries `Not(Cancelled)` (R50): a cancelled world must not re-arm the work the
+ * operator just stopped. Cancellation-induced failures write no `SystemError` at
+ * all, so this guard covers the remaining case — errors that predate the cancel.
  */
 export const retry = defineSystem({
   name: 'retry',
-  query: [SystemError, RetryPolicy],
+  query: [SystemError, RetryPolicy, Not(Cancelled)],
   run: async (e, ctx) => {
     const policy = e.get(RetryPolicy);
     const attempts = new Map<string, number>();

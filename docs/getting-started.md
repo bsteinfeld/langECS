@@ -315,6 +315,7 @@ trace waterfall.
   [debugging reactive systems](./guides/debugging-systems.md) ("why didn't my
   system fire?"), [structured output and routing](./guides/structured-output.md),
   [errors and retries](./guides/errors-and-retries.md),
+  [cancellation and timeouts](./guides/cancellation-and-timeouts.md),
   [human-in-the-loop](./guides/human-in-the-loop.md),
   [multi-agent patterns](./guides/multi-agent.md),
   [persistence and time travel](./guides/persistence-and-time-travel.md),
