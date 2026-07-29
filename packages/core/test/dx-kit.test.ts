@@ -461,6 +461,51 @@ test('R61 withRateLimit caps concurrency and spaces out calls', async () => {
   expect(Date.now() - started).toBeGreaterThanOrEqual(15);
 });
 
+test('R61 withRateLimit: an aborted queued call never strands the calls behind it', async () => {
+  // Regression: the post-wake abort check used to sit OUTSIDE the try/finally, so
+  // a waiter that aborted after being handed a slot swallowed the baton and every
+  // remaining queued call hung forever.
+  const completed: string[] = [];
+  const slow: Model = {
+    generate: async (req) => {
+      await delay(15, req.signal);
+      return { message: { role: 'assistant', content: 'done' } };
+    },
+  };
+  const model = wrapModel(slow, withRateLimit({ concurrency: 1 }));
+
+  const cancelSecond = new AbortController();
+  const first = model.generate({ messages: [] }).then(() => completed.push('first'));
+  // Both of these queue behind `first`.
+  const second = model.generate({ messages: [], signal: cancelSecond.signal }).then(
+    () => completed.push('second'),
+    () => completed.push('second:aborted'),
+  );
+  const third = model.generate({ messages: [] }).then(() => completed.push('third'));
+
+  cancelSecond.abort();
+  await Promise.all([first, second, third]);
+
+  // The third call is the point: it must still get its turn.
+  expect(completed).toContain('third');
+  expect(completed).toContain('first');
+  expect(completed).toContain('second:aborted');
+
+  // The gate is not wedged — a later call still goes through.
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'done' },
+  });
+});
+
+test('R61 withRateLimit releases the slot when the call itself throws', async () => {
+  const model = wrapModel(flakyModel(1, 'recovered'), withRateLimit({ concurrency: 1 }));
+  await expect(model.generate({ messages: [] })).rejects.toThrow(/provider blip/);
+  // A thrown call must hand its slot back, or capacity leaks one per failure.
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'recovered' },
+  });
+});
+
 test('R61 middleware that only wraps generate keeps the model streamable', async () => {
   const streaming = scriptedModel([{ role: 'assistant', content: 'streamed' }]);
   // withCost/withRetry etc. must not silently strip `stream` — stdlib's callLLM
