@@ -11,7 +11,13 @@ export interface ToolDef {
   parameters?: Record<string, unknown>;
   /** When true, `toolApproval` interrupts the run before this tool executes. */
   needsApproval?: boolean;
-  execute: (args: unknown) => unknown | Promise<unknown>;
+  /**
+   * Runs the tool. The second argument carries the executing pair's
+   * cancellation signal (R51) — forward it to `fetch`/a client so a cancelled
+   * world or an elapsed `timeoutMs` actually stops the work. Optional, so
+   * existing one-argument tools keep working unchanged.
+   */
+  execute: (args: unknown, ctx?: { signal: AbortSignal }) => unknown | Promise<unknown>;
 }
 
 /** Identity helper for typing/DX symmetry with `defineComponent`/`defineSystem`. */

@@ -23,7 +23,8 @@
     "research-team": "tsx research-team/main.ts",
     "devtools-demo": "tsx devtools-demo/main.ts",
     "context-window": "tsx context-window/main.ts",
-    "rag-qa": "tsx rag-qa/main.ts"
+    "rag-qa": "tsx rag-qa/main.ts",
+    "cancellation": "tsx cancellation/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.69",

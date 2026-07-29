@@ -179,6 +179,31 @@ export class CancelledError extends LangECSError {
   }
 }
 
+/**
+ * The error recorded when a system exceeds its `timeoutMs` (R52).
+ *
+ * A timeout takes the same path as a throw (R31): the pair's buffer is
+ * discarded and this lands in the entity's `SystemError`, which is what makes a
+ * hung step recoverable — the stdlib `retry` system can heal it, and R32
+ * auto-clears the record on a later success.
+ */
+export class SystemTimeoutError extends LangECSError {
+  readonly system: string;
+  readonly entity: number;
+  readonly timeoutMs: number;
+
+  constructor(system: string, entity: number, timeoutMs: number) {
+    super(
+      `System "${system}" exceeded its ${timeoutMs}ms timeout on entity ${entity} and was abandoned (R52). ` +
+        `The pair's buffered writes were discarded; its \`ctx.signal\` was aborted so the underlying call can stop.`,
+    );
+    this.name = 'SystemTimeoutError';
+    this.system = system;
+    this.entity = entity;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 /** Thrown when an external mutation targets an entity that does not exist. */
 export class UnknownEntityError extends LangECSError {
   readonly entity: number;

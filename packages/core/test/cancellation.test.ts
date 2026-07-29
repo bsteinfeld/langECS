@@ -1,0 +1,318 @@
+// Cancellation (R50/R51) and per-system timeouts (R52/R53). Deterministic and
+// zero-network: every "slow" call is either an interruptible `delay` or a
+// promise the test resolves by hand.
+//
+// The timing here is deliberate, not lucky. `world.run()` executes its
+// synchronous prefix — candidate selection, guards, `system:start` — before it
+// returns, so a system that awaits is already parked by the time the next line
+// of the test runs. That makes "cancel while in flight" reproducible without
+// sleeping.
+
+import { expect, test } from 'vitest';
+import {
+  Cancelled,
+  createWorld,
+  defineComponent,
+  defineSystem,
+  defineTag,
+  delay,
+  Not,
+  SystemError,
+  scriptedModel,
+  throwIfAborted,
+} from '../src/index';
+
+const Job = defineComponent<{ label: string }>({ name: 'cancel.Job' });
+const Done = defineTag('cancel.Done');
+const Mark = defineComponent<string>({ name: 'cancel.Mark' });
+
+/** Honours `ctx.signal` the way a well-behaved system should (R51). */
+const slowGuarded = defineSystem({
+  name: 'slowGuarded',
+  query: [Job, Not(Done), Not(Cancelled)],
+  run: async (e, ctx) => {
+    await delay(60_000, ctx.signal);
+    e.add(Done);
+  },
+});
+
+test('R50 cancel mid-run: Cancelled is stamped, guarded work never lands, status is cancelled', async () => {
+  const world = createWorld();
+  world.use(slowGuarded);
+  const job = world.spawn(Job({ label: 'a' }));
+
+  const run = world.run();
+  world.cancel('operator stopped it');
+  const result = await run;
+
+  expect(result.status).toBe('cancelled');
+  // The pair's write never committed: its buffer was discarded when the
+  // aborted `delay` rejected.
+  expect(world.entity(job.id)?.has(Done)).toBe(false);
+  expect(world.entity(job.id)?.get(Cancelled)).toMatchObject({ reason: 'operator stopped it' });
+  // Cancellation is not failure (R50) — nothing for a retry system to re-arm.
+  expect(result.errors).toEqual([]);
+  expect(world.entity(job.id)?.has(SystemError)).toBe(false);
+});
+
+test('R50 a cancelled run reports cancelled even when a pair also failed for another reason', async () => {
+  const boom = defineSystem({
+    name: 'boom',
+    query: [Job, Not(Cancelled)],
+    run: async (_e, ctx) => {
+      await delay(60_000, ctx.signal);
+    },
+  });
+  const world = createWorld();
+  world.use(boom);
+  const job = world.spawn(Job({ label: 'b' }));
+
+  const run = world.run();
+  world.cancel();
+  const result = await run;
+
+  // Without 'cancelled' outranking 'error', the caller could not tell "I
+  // stopped this" from "it broke" — the aborted call itself throws.
+  expect(result.status).toBe('cancelled');
+  expect(world.entity(job.id)?.has(SystemError)).toBe(false);
+  // A reason is optional; the record still carries the boundary step.
+  expect(world.entity(job.id)?.get(Cancelled)).toEqual({ step: 0 });
+});
+
+test('R50 cancel is state: it survives a snapshot round-trip and lifts when removed', async () => {
+  const world = createWorld();
+  world.use(slowGuarded);
+  const job = world.spawn(Job({ label: 'c' }));
+  const run = world.run();
+  world.cancel('stop');
+  await run;
+
+  // Durable for free, because cancellation is an ordinary component.
+  const snapshot = world.snapshot();
+  const reloaded = createWorld();
+  reloaded.use(slowGuarded);
+  reloaded.load(snapshot);
+  expect(reloaded.entity(job.id)?.get(Cancelled)).toMatchObject({ reason: 'stop' });
+  // Still cancelled, so a fresh run does nothing.
+  expect((await reloaded.run()).status).toBe('cancelled');
+
+  // Un-cancel by removing the component — no special engine API needed. The
+  // guard term matches again, so the work is live: no engine flag to reset, and
+  // nothing that could outlive the state it came from.
+  expect(reloaded.systemsMatching(job.id).map((s) => s.key)).toEqual([]);
+  reloaded.entity(job.id)?.remove(Cancelled);
+  expect(reloaded.systemsMatching(job.id).map((s) => s.key)).toEqual(['slowGuarded']);
+  const resumed = reloaded.run();
+  expect(reloaded.runningPairs().map((p) => p.system)).toEqual(['slowGuarded']);
+  reloaded.cancel('stop the resumed run too');
+  expect((await resumed).status).toBe('cancelled');
+});
+
+test('R50 cancel while idle applies immediately, like any other external write', async () => {
+  const world = createWorld();
+  world.use(slowGuarded);
+  const a = world.spawn(Job({ label: 'x' }));
+  const b = world.spawn(Job({ label: 'y' }));
+
+  world.cancel('before we started');
+
+  // Every entity is stamped, so every Not(Cancelled) system unmatches at once.
+  expect(world.entity(a.id)?.get(Cancelled)).toMatchObject({ reason: 'before we started' });
+  expect(world.entity(b.id)?.get(Cancelled)).toMatchObject({ reason: 'before we started' });
+  expect(world.systemsMatching(a.id).map((s) => s.key)).toEqual([]);
+  const result = await world.run();
+  expect(result.status).toBe('cancelled');
+  expect(result.steps).toBe(0);
+});
+
+test('R51 ctx.signal reaches the model and cancels the call in flight', async () => {
+  const Reply = defineComponent<string>({ name: 'cancel.Reply' });
+  const callModel = defineSystem({
+    name: 'callModel',
+    query: [Job, Not(Reply), Not(Cancelled)],
+    run: async (e, ctx) => {
+      const model = scriptedModel([{ role: 'assistant', content: 'too late' }], {
+        delayMs: 60_000,
+      });
+      // The whole point of R49: the signal goes into the request.
+      const result = await model.generate({ messages: [], signal: ctx.signal });
+      e.set(Reply, result.message.content);
+    },
+  });
+  const world = createWorld();
+  world.use(callModel);
+  const job = world.spawn(Job({ label: 'ask' }));
+
+  const run = world.run();
+  world.cancel('changed my mind');
+  const result = await run;
+
+  expect(result.status).toBe('cancelled');
+  expect(world.entity(job.id)?.has(Reply)).toBe(false);
+});
+
+test('R52 a hung system times out into SystemError while its siblings commit normally', async () => {
+  const hang = defineSystem({
+    name: 'hang',
+    query: [Job],
+    timeoutMs: 10,
+    // Never settles: without a timeout this hangs the barrier forever — no
+    // commit, no snapshot, `world.running` stuck true.
+    run: () => new Promise<void>(() => {}),
+  });
+  const healthy = defineSystem({
+    name: 'healthy',
+    query: [Job],
+    run: (e) => {
+      e.set(Mark, 'committed');
+    },
+  });
+  const world = createWorld();
+  world.use(hang);
+  world.use(healthy);
+  const job = world.spawn(Job({ label: 'slow' }));
+
+  const result = await world.run();
+
+  // The step still committed, and the healthy pair's write landed.
+  expect(world.entity(job.id)?.get(Mark)).toBe('committed');
+  // The timeout took R31's path, so `retry` can heal it (unlike a cancel).
+  expect(result.status).toBe('error');
+  const records = world.entity(job.id)?.get(SystemError) ?? [];
+  expect(records).toHaveLength(1);
+  expect(records[0]?.system).toBe('hang');
+  expect(records[0]?.error.name).toBe('SystemTimeoutError');
+  expect(records[0]?.error.message).toMatch(/exceeded its 10ms timeout/);
+});
+
+test('R52 an abandoned pair can never land a write, however late it finishes', async () => {
+  let release: (() => void) | undefined;
+  const late = defineSystem({
+    name: 'late',
+    query: [Job],
+    timeoutMs: 5,
+    run: async (e) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // Runs AFTER the barrier that abandoned this pair. Buffering it would
+      // commit a write at a barrier this system was no longer part of.
+      e.set(Mark, 'should never appear');
+    },
+  });
+  const world = createWorld();
+  world.use(late);
+  const job = world.spawn(Job({ label: 'zombie' }));
+
+  const result = await world.run();
+  expect(result.status).toBe('error');
+
+  // Let the abandoned system finish, then give its write every chance to land.
+  release?.();
+  await delay(10);
+  expect(world.entity(job.id)?.has(Mark)).toBe(false);
+  // And it is still just the one timeout record — no second error, no commit.
+  expect(world.entity(job.id)?.get(SystemError)).toHaveLength(1);
+});
+
+test('R52 a sibling timeout never aborts a healthy pair (per-pair signals)', async () => {
+  const seen: { hang?: boolean; ok?: boolean } = {};
+  const hang = defineSystem({
+    name: 'hangAlone',
+    query: [Job],
+    timeoutMs: 10,
+    run: async (_e, ctx) => {
+      await delay(60_000, ctx.signal).catch(() => {
+        seen.hang = ctx.signal.aborted;
+      });
+    },
+  });
+  const ok = defineSystem({
+    name: 'okAlone',
+    query: [Job],
+    run: async (e, ctx) => {
+      await delay(30, ctx.signal);
+      // Its own signal must still be live even though a sibling blew up.
+      seen.ok = ctx.signal.aborted;
+      throwIfAborted(ctx.signal);
+      e.set(Mark, 'healthy');
+    },
+  });
+  const world = createWorld();
+  world.use(hang);
+  world.use(ok);
+  const job = world.spawn(Job({ label: 'mixed' }));
+
+  await world.run();
+  expect(seen.hang).toBe(true);
+  expect(seen.ok).toBe(false);
+  expect(world.entity(job.id)?.get(Mark)).toBe('healthy');
+});
+
+test('R52 the world default applies where a system sets no timeout of its own', async () => {
+  const hang = defineSystem({
+    name: 'hangDefault',
+    query: [Job],
+    run: () => new Promise<void>(() => {}),
+  });
+  const world = createWorld({ systemTimeoutMs: 10 });
+  world.use(hang);
+  const job = world.spawn(Job({ label: 'default' }));
+
+  const result = await world.run();
+  expect(result.status).toBe('error');
+  expect(world.entity(job.id)?.get(SystemError)?.[0]?.error.name).toBe('SystemTimeoutError');
+});
+
+test('R53 runningPairs reports what is in flight, and is empty at quiescence', async () => {
+  let observed: ReturnType<typeof world.runningPairs> = [];
+  const watcher = defineSystem({
+    name: 'watcher',
+    query: [Job],
+    timeoutMs: 5_000,
+    run: async (_e, ctx) => {
+      observed = world.runningPairs();
+      await delay(1, ctx.signal);
+    },
+  });
+  const world = createWorld();
+  world.use(watcher);
+  const job = world.spawn(Job({ label: 'watch' }));
+
+  expect(world.runningPairs()).toEqual([]);
+  await world.run();
+
+  expect(observed).toHaveLength(1);
+  expect(observed[0]).toMatchObject({
+    system: 'watcher',
+    entity: job.id,
+    step: 1,
+    timeoutMs: 5_000,
+  });
+  expect(observed[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  // Cleared once the run settles, so a stale pair can never look in flight.
+  expect(world.runningPairs()).toEqual([]);
+});
+
+test('R52 timeouts and cancellation compose: cancel stops waiting on a signal-ignoring system', async () => {
+  // A system that ignores ctx.signal cannot be interrupted by cancel alone
+  // (cancellation is cooperative, R49) — timeoutMs is the hard bound.
+  const stubborn = defineSystem({
+    name: 'stubborn',
+    query: [Job, Not(Cancelled)],
+    timeoutMs: 15,
+    run: () => new Promise<void>(() => {}),
+  });
+  const world = createWorld();
+  world.use(stubborn);
+  const job = world.spawn(Job({ label: 'stubborn' }));
+
+  const run = world.run();
+  world.cancel('stop now');
+  const result = await run;
+
+  // The timeout is what actually released the barrier; the cancel decided the
+  // status and stamped the state.
+  expect(result.status).toBe('cancelled');
+  expect(world.entity(job.id)?.get(Cancelled)).toMatchObject({ reason: 'stop now' });
+});

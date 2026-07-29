@@ -390,6 +390,7 @@ editing the result of `handle.get(C)`.
 - [getting-started.md](./getting-started.md) — the runnable walkthrough.
 - The guides — each concept above, applied:
   [errors and retries](./guides/errors-and-retries.md),
+  [cancellation and timeouts](./guides/cancellation-and-timeouts.md),
   [human-in-the-loop](./guides/human-in-the-loop.md),
   [multi-agent patterns](./guides/multi-agent.md),
   [persistence and time travel](./guides/persistence-and-time-travel.md),

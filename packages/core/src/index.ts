@@ -4,6 +4,8 @@
 export { type AgentDef, defineAgent } from './agent';
 export {
   AwaitingHuman,
+  type CancellationRecord,
+  Cancelled,
   type ErrorRecord,
   HumanResponse,
   type InterruptRecord,
@@ -36,6 +38,7 @@ export {
   MissingResourceError,
   type SerializedError,
   SnapshotVersionError,
+  SystemTimeoutError,
   UnknownComponentError,
   UnknownEntityError,
   UnknownSystemError,
@@ -93,4 +96,4 @@ export {
   type WorldReadView,
 } from './system';
 export { type DroppedWrite, formatTrace, type StepTrace, type TraceRun } from './trace';
-export { createWorld, type World, type WorldOptions } from './world';
+export { createWorld, type RunningPair, type World, type WorldOptions } from './world';
