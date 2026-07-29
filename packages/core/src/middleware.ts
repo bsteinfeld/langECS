@@ -285,18 +285,46 @@ export function withRateLimit(opts: RateLimitOptions): ModelMiddleware {
 
   const release = (): void => {
     active -= 1;
+    // Hands the freed slot to the next waiter. Every acquired slot MUST come
+    // back through here, or the queue behind it never moves.
     waiting.shift()?.();
   };
+
+  /**
+   * Waits for a turn, honouring `signal` while queued.
+   *
+   * A queued caller that aborts removes **itself** from the queue and rejects, so
+   * it never consumes a slot it is not going to use. Once it has been granted a
+   * turn, though, it stops being cancellable here: the slot has to be released
+   * through the normal path so the baton reaches the next waiter.
+   */
+  const waitTurn = (signal?: AbortSignal): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const grant = (): void => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      function onAbort(): void {
+        const at = waiting.indexOf(grant);
+        if (at === -1) return; // already granted: release() will pass the baton
+        waiting.splice(at, 1);
+        reject(abortReason(signal as AbortSignal));
+      }
+      waiting.push(grant);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
 
   return (inner) => {
     const gate = async <R>(req: ModelRequest, call: () => Promise<R>): Promise<R> => {
       throwIfAborted(req.signal);
-      if (active >= concurrency) {
-        await new Promise<void>((resolve) => waiting.push(resolve));
-        throwIfAborted(req.signal);
-      }
+      if (active >= concurrency) await waitTurn(req.signal);
       active += 1;
       try {
+        // Checked INSIDE the try, so an abort here still runs `release()`. With
+        // the check outside it, a waiter that aborted between being handed a slot
+        // and taking it would swallow the baton, and every remaining queued call
+        // would hang forever with nothing left to wake it.
+        throwIfAborted(req.signal);
         const since = now() - lastStart;
         if (minIntervalMs > 0 && since < minIntervalMs) {
           await delay(minIntervalMs - since, req.signal);
