@@ -43,14 +43,20 @@ type includes those.
   single model step returns tool calls to the engine unexecuted, because tool execution
   belongs to the world (stdlib `executeTools`), not the SDK. Sampling controls pass
   through when set — `temperature`, `maxTokens` (→ `maxOutputTokens`), `topP`, `topK`,
-  `frequencyPenalty`, `presencePenalty`, `seed`, `stopSequences`; usage and
-  `finishReason` map back; `raw` carries the original SDK result. Reasoning models'
-  thinking is captured into `Msg.thinking` (from the SDK's reasoning output).
+  `frequencyPenalty`, `presencePenalty`, `seed`, `stopSequences`; `signal` is forwarded
+  as the SDK's `abortSignal` (R49); usage and `finishReason` map back; `raw` carries the
+  original SDK result. Reasoning models' thinking is captured into `Msg.thinking` (from
+  the SDK's reasoning output).
 - **`stream()` → `streamText`.** Text deltas are forwarded to `onChunk` as they arrive;
   reasoning deltas are accumulated into `Msg.thinking` (not forwarded as answer text);
   tool calls and usage are collected from the full stream; the resolved `ModelResult`
   has the same shape as `generate()`. Stream errors are re-thrown (they surface as a
   failing system in the world, i.e. a `SystemError` record — not a crash).
+
+Cancellation applies to both entry points, and the adapter checks `req.signal` itself
+before handing the call to the SDK: a signal that has *already* aborted rejects at the
+adapter boundary, without calling the provider at all. The SDK's own abort handling lives
+in its HTTP layer, which a request that never goes out never reaches.
 
 ## Streaming
 

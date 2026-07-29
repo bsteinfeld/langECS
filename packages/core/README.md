@@ -610,7 +610,8 @@ interface ModelRequest { messages: Msg[]; system?: string; tools?: ToolSpec[];
                          temperature?: number; maxTokens?: number;
                          // additional sampling controls, forwarded by adapters when set:
                          topP?: number; topK?: number; frequencyPenalty?: number;
-                         presencePenalty?: number; seed?: number; stopSequences?: string[] }
+                         presencePenalty?: number; seed?: number; stopSequences?: string[];
+                         signal?: AbortSignal }   // cooperative cancellation (R49)
 interface ModelResult  { message: Msg; usage?: { inputTokens?: number; outputTokens?: number };
                          finishReason?: string; raw?: unknown }
 
@@ -620,12 +621,36 @@ interface Model {
 }
 ```
 
-### `scriptedModel(turns)`
+### Cooperative cancellation
+
+`ModelRequest.signal` carries an `AbortSignal` the caller owns — from its own
+`AbortController`, or from a timeout it set around the call. A custom `Model`
+implementation is expected to honour three things (R49): check the signal before starting
+work, which `throwIfAborted(req.signal)` does in one line; forward it to the underlying
+transport (`fetch`'s `signal`, an SDK client's own abort option) so an abort landing
+mid-flight actually stops the request rather than just stopping the wait; and **reject**
+— never resolve — once it aborts, because a cancelled call must not hand back a fresh
+reply. Prefer rejecting with the signal's own `reason`, so callers that switch on
+`err.name === 'AbortError'` keep working; `CancelledError` is there for implementations
+with no platform reason to re-throw. Cancellation is cooperative by construction: a model
+that ignores the signal cannot be interrupted, and the engine does not pretend otherwise.
+
+Core exports the helpers this needs, all isomorphic (R1): `throwIfAborted(signal?)` throws
+the signal's reason (or a `CancelledError`) when it has already aborted and is a no-op
+otherwise; `abortReason(signal)` returns that same value without throwing;
+`delay(ms, signal?)` is an interruptible sleep that rejects the instant the signal aborts;
+and `anySignal(signals)` combines several signals into one that aborts as soon as any
+input does, using the platform's `AbortSignal.any` where it exists. Both shipped adapters
+already forward the signal — [@langecs/ai-sdk](../ai-sdk/README.md) as `abortSignal`,
+[@langecs/langchain](../langchain/README.md) as the call's `signal` option.
+
+### `scriptedModel(turns, opts?)`
 
 A deterministic `Model` for tests: returns the scripted turns in order (each turn a
-`Msg` or `(req: ModelRequest) => Msg`), supports `stream` by chunking content, and
-throws if called more times than scripted. The entire LangECS test suite — and every
-example's test — runs on it with zero network.
+`Msg`, or a `(req: ModelRequest) => Msg | Promise<Msg>` function — returning a promise is
+how a test scripts a slow, or never-settling, call), supports `stream` by chunking
+content, and throws if called more times than scripted. The entire LangECS test suite —
+and every example's test — runs on it with zero network.
 
 ```ts
 world.register('model:main', scriptedModel([
@@ -633,6 +658,13 @@ world.register('model:main', scriptedModel([
   { role: 'assistant', content: 'The answer is 5.' },
 ]));
 ```
+
+It honours `req.signal` like a real model does (R49). `opts.delayMs` delays every turn by
+that many milliseconds, interruptibly: an abort during the wait rejects at that moment,
+which is how a test exercises cancellation deterministically. A call whose signal has
+*already* aborted rejects **without consuming a turn**, so the script stays aligned for
+whatever runs next — a cancelled step must not silently eat the reply the following step
+expects.
 
 ---
 
@@ -652,6 +684,7 @@ All engine errors extend `LangECSError extends Error`.
 | `DeserializeError` | A component's `deserialize` hook throws during `load()`. Fields: `entity`, `component`, `cause`. |
 | `MissingResourceError` | `ctx.resource(name)` with nothing registered under `name`. Field: `resourceName`. |
 | `UnknownEntityError` | An external mutation targets a nonexistent (e.g. despawned) entity. Field: `entity`. |
+| `CancelledError` | A cancellation-aware operation (`throwIfAborted`, `delay`) meets an aborted signal that carries no `reason` of its own. Field: `reason`, when one was supplied. |
 
 `SerializedError = { name: string; message: string; stack?: string }` is the shape
 errors take inside `SystemError` records and `system:error` events.
