@@ -200,15 +200,30 @@ worker B  load(step 5) → run → fence(id, 6) → false → FenceError, stops
 ```
 
 `fence` must be **monotonic per worldId**: granting a step implicitly refuses
-that step and everything below it. Implementations must make the check-and-claim
-**atomic** against other writers — a conditional write, a compare-and-set, or
-`O_EXCL`. A read followed by a separate write reintroduces the very race it
-exists to close. `persist-fs` uses exclusive create (`wx`), which the kernel makes
-atomic across processes:
+that step and everything below it. Making that atomic is subtler than it looks.
+`O_EXCL`/`wx` is atomic only against an **identical key**, so two callers claiming
+*different* steps never contend — and a read-then-write grants both, which is two
+divergent timelines and no error. `persist-fs` therefore creates its lock **first**
+and validates **after**:
 
 ```ts
-await writeFile(lockPath, stamp, { flag: 'wx' })   // EEXIST ⇒ someone else won
+await writeFile(lockPath(step), String(step), { flag: 'wx' })  // EEXIST ⇒ same step taken
+if (await highestFence(dir) > step) { await rm(lockPath(step)); return false }  // stale ⇒ withdraw
 ```
+
+The highest step wins whether the calls race or not, and a loser never leaves a
+lock behind.
+
+Two limits worth knowing, because they are not obvious:
+
+- **Fencing coordinates only the worlds that opted in.** `save()` does not consult
+  claims, so a world created *without* `{ fence: true }` on the same id and adapter
+  can still overwrite a fenced world's history. Mixing the two on one id is
+  unsupported — a stray ops script or devtools session is exactly the case to
+  watch.
+- **A fence cannot see the future.** It refuses a step at or below one already
+  claimed, so a *stale* worker claiming a *lower* step first is caught by
+  `claim()`'s comparison against the store, not by the fence.
 
 **Fencing is opt-in per world, and deliberately not implied by the adapter having
 the method.** A time-travel world legitimately rewrites steps it has already

@@ -7,6 +7,7 @@ import {
   createWorld,
   defineComponent,
   defineSystem,
+  delay,
   MemoryAdapter,
   type Snapshot,
   scriptedModel,
@@ -491,3 +492,131 @@ function emptySnapshot(): Snapshot {
     pendingPairs: [],
   };
 }
+
+// ---------------------------------------------------------------------------
+// Regressions from the adversarial review of the shipped M3/M4/M6 work. Each of
+// these failed against the code as first merged.
+// ---------------------------------------------------------------------------
+
+test('R58 a run that commits no step still persists changed state', async () => {
+  const adapter = new MemoryAdapter();
+  const world = createWorld({ id: 'idle', persistence: adapter });
+  world.spawn(Topic('nothing matches this')); // no system registered
+
+  const result = await world.run();
+  expect(result.status).toBe('idle');
+  // The revision skip used to make this write NOTHING at all: an entity spawned
+  // and persisted-immediately, the documented "resume in another process" flow,
+  // vanished because no step was committed.
+  const stored = await adapter.load('idle');
+  expect(stored?.entities).toHaveLength(1);
+  expect(adapter.history('idle').map((h) => h.step)).toEqual([0]);
+});
+
+test('R50/R58 an idle cancel is persisted, so the world cannot resume un-cancelled', async () => {
+  const adapter = new MemoryAdapter();
+  const world = createWorld({ id: 'idlecancel', persistence: adapter });
+  world.use(writeArticle);
+  world.spawn(Topic('a'));
+  await world.run();
+
+  world.cancel('operator stopped'); // idle branch
+  const result = await world.run();
+  expect(result.status).toBe('cancelled');
+
+  // Previously the stamp lived only in memory: the run reported 'cancelled' while
+  // the store held a live world, so a restart resumed the work just stopped.
+  const stored = (await adapter.load('idlecancel')) as Snapshot;
+  const cancelled = stored.entities.filter((e) => 'Cancelled' in e.components);
+  expect(cancelled).toHaveLength(1);
+
+  const resumed = createWorld({ id: 'idlecancel' });
+  resumed.use(writeArticle);
+  resumed.load(stored);
+  expect((await resumed.run()).status).toBe('cancelled');
+});
+
+test('R57 cancelling a FENCED world does not fence it out of its own step', async () => {
+  const adapter = new MemoryAdapter();
+  const slow = defineSystem({
+    name: 'slowFenced',
+    query: [Topic],
+    run: async (_e, ctx) => {
+      await delay(60_000, ctx.signal);
+    },
+  });
+  const world = createWorld({ id: 'selffence', persistence: adapter, fence: true });
+  world.use(slow);
+  world.spawn(Topic('a'));
+  await world.claim();
+
+  const run = world.run();
+  world.cancel('stop');
+  // The fence is keyed on the step, the save on the revision. A cancellation
+  // changes state WITHOUT advancing the step, so the run-end save re-claimed a
+  // step this same world already owned and was refused — the run rejected with
+  // FenceError naming a rival that did not exist, and the cancellation was lost.
+  const result = await run;
+  expect(result.status).toBe('cancelled');
+  const stored = (await adapter.load('selffence')) as Snapshot;
+  expect(stored.entities.some((e) => 'Cancelled' in e.components)).toBe(true);
+});
+
+test('R56 canLoad reports a throwing migration instead of propagating it', async () => {
+  const world = createWorld({ id: 'evo', recipeVersion: 2 });
+  world.migration(1, 2, () => {
+    throw new Error('migration blew up');
+  });
+  const check = world.canLoad({ ...emptySnapshot(), recipeVersion: 1 });
+  expect(check.ok).toBe(false);
+  // R56 promises no side effects and nothing thrown; a broken migration is the
+  // thing the deploy gate exists to catch, not a way to crash the pipeline.
+  if (!check.ok) expect(check.migrationFailed?.error.message).toBe('migration blew up');
+  // `load` still throws, which is correct — only the pre-flight is non-throwing.
+  expect(() => world.load({ ...emptySnapshot(), recipeVersion: 1 })).toThrow(/blew up/);
+});
+
+test('R54 a migration chain must ascend, and must not overshoot the world', () => {
+  const world = createWorld({ recipeVersion: 3 });
+  expect(() => world.migration(9, 3, (s) => s)).toThrow(/does not move forward/);
+  expect(() => world.migration(2, 2, (s) => s)).toThrow(/does not move forward/);
+  // 1->9 in a v3 world used to be accepted, then walked a v1 snapshot up past the
+  // schema this build understands and failed on a hop nobody wrote.
+  expect(() => world.migration(1, 9, (s) => s)).toThrow(/overshoots this world's recipeVersion 3/);
+  expect(() => world.migration(1, 2, (s) => s)).not.toThrow();
+});
+
+test('R55 a preserved value never resurrects after live code writes or removes it', async () => {
+  const world = createWorld({ id: 'evict' });
+  world.use(writeArticle);
+  const entity = world.spawn(Topic('x'));
+  await world.run();
+
+  // A snapshot carrying a component name this build does not know yet.
+  const raw: Snapshot = {
+    ...world.snapshot(),
+    worldId: 'evict',
+    entities: [{ id: entity.id, components: { 'late.Owned': { keep: 'stale' } } }],
+    pendingPairs: [],
+  };
+  const lenient = createWorld({ id: 'evict' });
+  lenient.use(writeArticle);
+  expect(lenient.load(raw, { strict: false }).preserved).toEqual([
+    { entity: entity.id, component: 'late.Owned' },
+  ]);
+  // While nothing live owns the name it round-trips — that is R55 working.
+  expect(lenient.snapshot().entities[0]?.components).toHaveProperty('late.Owned');
+
+  // Now the deploy that owns it arrives (importing its module registers the name).
+  const LateOwned = defineComponent<{ keep: string }>({ name: 'late.Owned' });
+
+  // A live write must win, and must retire the stale copy.
+  lenient.entity(entity.id)?.set(LateOwned, { keep: 'live' });
+  expect(lenient.snapshot().entities[0]?.components['late.Owned']).toEqual({ keep: 'live' });
+
+  // And a deliberate removal must STAY removed. Previously the next snapshot
+  // re-emitted the other deployment's stale value, silently undoing the delete —
+  // the exact inverse of what R55 promises.
+  lenient.entity(entity.id)?.remove(LateOwned);
+  expect(lenient.snapshot().entities[0]?.components).not.toHaveProperty('late.Owned');
+});
