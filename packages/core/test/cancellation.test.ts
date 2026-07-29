@@ -493,15 +493,16 @@ test('R50 a cancel landing during the run-end save is honoured, not dropped', as
   // the next run reset the flag. It returned void and left no trace, so a UI
   // gating its Cancel button on `world.running` showed a live control that did
   // nothing. With a real fs/S3/Postgres adapter the window is seconds.
-  // A one-step run saves twice: once at the barrier, once at run end. The barrier
-  // save is fine — the loop continues and honours the cancel. The RUN-END save is
-  // the hole, so fire on the second save.
+  // `saveEvery: 'quiescence'` makes the RUN-END save the only save, which is the
+  // window with the hole: the loop has already exited, so a cancel arriving here
+  // had nothing left to read it. (A cancel during a BARRIER save is fine — the
+  // loop continues and handles it at the next top.)
   let saves = 0;
   let world: World;
   const slowAdapter = {
     async save() {
       saves += 1;
-      if (saves === 2) world.cancel('stopped while saving');
+      if (saves === 1) world.cancel('stopped while saving');
       await delay(20);
     },
     load: () => null,
@@ -513,12 +514,12 @@ test('R50 a cancel landing during the run-end save is honoured, not dropped', as
       e.add(Done);
     },
   });
-  world = createWorld({ persistence: slowAdapter });
+  world = createWorld({ persistence: slowAdapter, saveEvery: 'quiescence' });
   world.use(bump);
   const job = world.spawn(Job({ label: 'a' }));
 
   const result = await world.run();
-  expect(saves).toBeGreaterThanOrEqual(2);
+  expect(saves).toBeGreaterThanOrEqual(1);
 
   expect(result.status).toBe('cancelled');
   expect(world.entity(job.id)?.get(Cancelled)).toMatchObject({

@@ -8,10 +8,15 @@ import { getComponentByName, isComponentType } from './component';
 import {
   CancelledError,
   DeserializeError,
+  DuplicateMigrationError,
   DuplicateSystemError,
+  FenceError,
+  LangECSError,
   MissingResourceError,
+  RecipeVersionError,
   type SerializedError,
   SnapshotVersionError,
+  StaleSnapshotError,
   SystemTimeoutError,
   serializeError,
   UnknownComponentError,
@@ -32,7 +37,7 @@ import type {
 } from './observe';
 import type { PersistenceAdapter } from './persistence';
 import type { ResourceRef } from './resource';
-import type { Snapshot } from './snapshot';
+import type { LoadCheck, LoadReport, Migration, PendingPair, Snapshot } from './snapshot';
 import type {
   EntityHandle,
   EntityReadView,
@@ -91,6 +96,32 @@ export interface WorldOptions {
    * forever. Set it on any world whose systems make network calls.
    */
   systemTimeoutMs?: number;
+  /**
+   * Version of **your** component/system vocabulary (R54) — not the engine's
+   * snapshot format, which is versioned separately and independently. Stamped
+   * into every snapshot and used to pick migrations on `load`. Bump it whenever
+   * you rename or reshape a component, and register a `world.migration` for the
+   * step; leaving it unset means version 0 and no migration.
+   */
+  recipeVersion?: number;
+  /**
+   * How often the engine persists (R58). `'barrier'` (default) saves after every
+   * committed step — required for step-level time travel. `'quiescence'` saves
+   * only at run end. A number saves every N steps. Run end always saves, at
+   * every setting, so a quiesced world is never unpersisted.
+   */
+  saveEvery?: 'barrier' | 'quiescence' | number;
+  /**
+   * Ask the adapter to fence every write (R57). With `true`, the engine calls
+   * `adapter.fence(worldId, step)` before each save and rejects the run with
+   * `FenceError` if another instance already owns that step — the guard against
+   * two workers resuming one snapshot and silently diverging.
+   *
+   * Off by default, and deliberately not implied by the adapter having a
+   * `fence` method: a time-travel world replays steps it has already written, so
+   * fencing it would refuse its own legitimate rewrites (R38).
+   */
+  fence?: boolean;
 }
 
 /** One pair executing right now, as reported by `world.runningPairs()` (R53). */
@@ -231,8 +262,76 @@ export interface World {
    * Pre-existing entities are discarded and the flight-recorder buffer is
    * cleared (R42): the trace never mixes steps from two timelines. Idle-only;
    * resources must be re-registered separately (R18).
+   *
+   * Registered migrations run first, bringing the snapshot's `recipeVersion` up
+   * to this world's before anything is resolved (R54) — which is what lets a
+   * migration rename a component this build no longer knows about.
+   *
+   * Options:
+   * - `expectedStep` — throw `StaleSnapshotError` unless the snapshot sits at
+   *   exactly this step (R57). The adapter-free half of resume safety: cheap,
+   *   synchronous, and enough to catch a resume racing a worker that already
+   *   advanced the world.
+   * - `strict: false` — resolve what can be resolved and report the rest instead
+   *   of throwing (R55). Unknown components are **preserved as opaque data** and
+   *   written back by the next `snapshot()`; unknown `pendingPairs` are dropped
+   *   and reported, because dirt names a system that has to be scheduled and
+   *   there is nowhere to keep it.
    */
-  load(snapshot: Snapshot): void;
+  load(snapshot: Snapshot, opts?: { strict?: boolean; expectedStep?: number }): LoadReport;
+  /**
+   * Registers a migration from one `recipeVersion` to another (R54), applied by
+   * `load` in a forward chain. Two migrations sharing a `from` throw
+   * `DuplicateMigrationError`, so the upgrade path is never ambiguous.
+   *
+   * This is the answer to the failure that otherwise lands on the users who
+   * trusted persistence most: someone pauses a run awaiting approval, you deploy
+   * a component rename, and their world becomes permanently unloadable.
+   *
+   * ```ts
+   * const world = createWorld({ recipeVersion: 2 })
+   * world.migration(1, 2, (s) => {
+   *   for (const e of s.entities) {
+   *     if ('Draft' in e.components) {
+   *       e.components.Article = e.components.Draft
+   *       delete e.components.Draft
+   *     }
+   *   }
+   *   for (const p of s.pendingPairs) if (p.system === 'writeDraft') p.system = 'writeArticle'
+   *   return s
+   * })
+   * ```
+   */
+  migration(from: number, to: number, fn: Migration): void;
+  /**
+   * Whether this world could `load` that snapshot — no side effects, nothing
+   * mutated, nothing thrown (R56).
+   *
+   * Built for deploy-time and CI use: it answers "is any paused world about to
+   * become unloadable?" from a build pipeline, rather than from the user who
+   * paused it.
+   */
+  canLoad(snapshot: Snapshot): LoadCheck;
+  /**
+   * Claims ownership of this world at its current step (R57) — the async step of
+   * the resume recipe, called once after `load`:
+   *
+   * ```ts
+   * world.load(snapshot)
+   * await world.claim()        // throws FenceError if another worker owns it
+   * await world.resume(entity, true)
+   * ```
+   *
+   * **This is what makes side effects exactly-once, and the save-time fence
+   * alone does not.** Fencing at save time stops the loser from persisting a
+   * divergent timeline, but by then its systems have already run — a duplicate
+   * refund has been issued, a record already deleted. Claiming before any step
+   * executes is what stops the loser from doing the work at all.
+   *
+   * Requires a `fence`-capable adapter; throws otherwise, rather than pretending
+   * to protect anything.
+   */
+  claim(): Promise<void>;
   /**
    * The flight recorder's ring buffer of recent `StepTrace`s (R42) — last
    * 1000 steps by default, empty when created with `trace: false`. Render
@@ -349,6 +448,29 @@ interface BarrierOutcome {
 const pairId = (systemKey: string, entity: number): string => `${systemKey}::${entity}`;
 
 /**
+ * Reads a component's registry name, rejecting anything that is not a
+ * `ComponentType`.
+ *
+ * Guards against the easy slip of passing a `ComponentInit` where a
+ * `ComponentType` belongs — `e.set(Topic('hi'))` instead of
+ * `e.set(Topic, 'hi')`. That currently type-checks (the zero-arg tag overload
+ * absorbs it) and used to store a component literally named `undefined`, which
+ * then travelled into every snapshot (R35) and could never be resolved on load
+ * (R36). Better to fail at the write with a message that names the mistake.
+ */
+const componentNameOf = (component: ComponentType<any>): string => {
+  const name = (component as { componentName?: unknown } | undefined)?.componentName;
+  if (typeof name !== 'string') {
+    throw new LangECSError(
+      'Expected a component type but got ' +
+        `${component === undefined ? 'undefined' : typeof component === 'object' && component !== null && 'component' in component ? 'a ComponentInit — write `set(C, value)`, not `set(C(value))`' : JSON.stringify(component)}. ` +
+        'A component with no name cannot be queried, snapshotted, or restored (R7/R35).',
+    );
+  }
+  return name;
+};
+
+/**
  * Buffers one op for a pair, unless the pair was abandoned on timeout (R52).
  *
  * The refusal is the load-bearing half of the timeout design. When the barrier
@@ -391,6 +513,24 @@ class WorldImpl implements World {
   private runCounter = 0;
   private readonly observers: WorldObserver[] = [];
   private readonly systemTimeoutMs: number | undefined;
+  private readonly recipeVersion: number;
+  private readonly saveEvery: 'barrier' | 'quiescence' | number;
+  private readonly fenced: boolean;
+  /** Forward migration chain keyed by `from` version (R54). */
+  private readonly migrations = new Map<number, { to: number; fn: Migration }>();
+  /**
+   * Components a non-strict load could not resolve, kept verbatim so the next
+   * `snapshot()` writes them back (R55). entity id -> component name -> raw value.
+   */
+  private preserved = new Map<number, Record<string, unknown>>();
+  /**
+   * Bumped on every committed state change. Persistence compares it against
+   * `savedRevision` so a boundary is never written twice — see `persist()`.
+   */
+  private revision = 0;
+  private savedRevision = 0;
+  /** Step this world currently holds a fence claim for (R57), if any. */
+  private ownedStep: number | undefined;
   /** Aborted by `cancel()` during a run; every pair's `ctx.signal` follows it (R50/R51). */
   private runCancel: AbortController | undefined;
   /** Cancellation requested during the current run but not yet stamped (R50). */
@@ -415,6 +555,9 @@ class WorldImpl implements World {
     this.persistence = opts?.persistence;
     this.recursionLimit = opts?.recursionLimit ?? 50;
     this.systemTimeoutMs = opts?.systemTimeoutMs;
+    this.recipeVersion = opts?.recipeVersion ?? 0;
+    this.saveEvery = opts?.saveEvery ?? 'barrier';
+    this.fenced = opts?.fence ?? false;
     const trace = opts?.trace;
     this.traceKeep =
       trace === false ? 0 : trace === true || trace === undefined ? 1000 : (trace.keep ?? 1000);
@@ -432,6 +575,28 @@ class WorldImpl implements World {
 
   private assertIdle(operation: string): void {
     if (this.runInFlight) throw new WorldRunningError(operation);
+  }
+
+  /**
+   * Records that committed state changed, so the next `persist()` writes (R58).
+   *
+   * EVERY path that mutates committed state must call this. Keying the save on a
+   * revision rather than the step number is what lets a cancellation boundary be
+   * persisted at all (it changes state without advancing the step) — but it also
+   * means a path that forgets to bump is silently never saved. Idle external
+   * mutations and an idle `cancel()` were exactly that: an idle run wrote nothing
+   * at all, and a cancelled world could resume un-cancelled.
+   */
+  private markChanged(): void {
+    this.revision += 1;
+  }
+
+  /** Drops an opaque value kept by a non-strict load, once live code owns the name (R55). */
+  private forgetPreserved(entity: number, name: string): void {
+    const kept = this.preserved.get(entity);
+    if (kept === undefined || !(name in kept)) return;
+    delete kept[name];
+    if (Object.keys(kept).length === 0) this.preserved.delete(entity);
   }
 
   // ------------------------------------------------------------- observers
@@ -558,7 +723,12 @@ class WorldImpl implements World {
   ): void {
     const comps = this.entities.get(entity);
     if (!comps) return;
-    const name = component.componentName;
+    const name = componentNameOf(component);
+    // Once live code writes this name, the opaque value kept from a non-strict
+    // load is stale and must go (R55). Leaving it meant the next `snapshot()`
+    // re-emitted the OLD value over the new one, and a deliberate `remove` was
+    // silently undone by the other deployment's data.
+    this.forgetPreserved(entity, name);
     let kind: 'set' | 'merge' = 'set';
     let next = value;
     if (op === 'add' && component.reducer && comps.has(name)) {
@@ -701,6 +871,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.applySpawnItems(id, items, changes, 'external');
     this.refreshDirt(changes);
+    this.markChanged();
     this.notifyExternal({ kind: 'spawn', entity: id });
     return this.externalHandle(id);
   }
@@ -742,6 +913,7 @@ class WorldImpl implements World {
     const changes: AttributedChange[] = [];
     this.commitWrite(id, component, value, op, 'external', changes);
     this.refreshDirt(changes);
+    this.markChanged();
     this.notifyExternal({ kind: 'write', entity: id, component: component.componentName });
   }
 
@@ -750,11 +922,13 @@ class WorldImpl implements World {
     const comps = this.entities.get(id);
     if (!comps) throw new UnknownEntityError(id);
     const name = component.componentName;
+    this.forgetPreserved(id, name);
     if (!comps.has(name)) return;
     comps.delete(name);
     this.refreshDirt([
       { record: { entity: id, component: name, kind: 'remove' }, writer: 'external' },
     ]);
+    this.markChanged();
     this.notifyExternal({ kind: 'remove', entity: id, component: name });
   }
 
@@ -762,8 +936,10 @@ class WorldImpl implements World {
     this.assertIdle('despawn entities externally');
     if (!this.entities.has(id)) throw new UnknownEntityError(id);
     this.entities.delete(id);
+    this.preserved.delete(id);
     for (const entityMap of this.dirt.values()) entityMap.delete(id);
     for (const matchSet of this.matched.values()) matchSet.delete(id);
+    this.markChanged();
     this.notifyExternal({ kind: 'despawn', entity: id });
   }
 
@@ -924,6 +1100,9 @@ class WorldImpl implements World {
       this.commitWrite(id, Cancelled, deepClone(record), 'set', writer, changes);
     }
     this.refreshDirt(changes);
+    // Both branches, idle and mid-run: an unpersisted cancellation means the world
+    // resumes un-cancelled and continues the work that was stopped.
+    if (changes.length > 0) this.markChanged();
     if (writer === 'external') {
       for (const change of changes) {
         this.notifyExternal({
@@ -1010,6 +1189,7 @@ class WorldImpl implements World {
         // keyed on the step, so a fenced world refused its own boundary. A veto
         // commits nothing, which is why that precedent does not apply here.
         this.stepCount += 1;
+        this.markChanged();
         break;
       }
 
@@ -1068,6 +1248,9 @@ class WorldImpl implements World {
       // dirt is consumed here, at this run's final boundary (R26).
       if (execs.length === 0) {
         for (const veto of vetoed) this.dirt.get(veto.system)?.delete(veto.entity);
+        // Consuming veto dirt changes `pendingPairs`, which is snapshot state
+        // (R35) — without this the store keeps dirt the world already discarded.
+        if (vetoed.length > 0) this.markChanged();
         this.pushTrace({
           step: stepNo,
           scheduled: scheduledRefs,
@@ -1133,7 +1316,10 @@ class WorldImpl implements World {
       });
 
       this.stepCount += 1;
-      if (this.persistence) await this.persistence.save(this.snapshot());
+      this.markChanged();
+      // Cadence (R58): 'barrier' persists every step, a number every N steps,
+      // 'quiescence' not at all here — the run-end save below covers it.
+      if (this.shouldSaveAtStep(this.stepCount)) await this.persist();
     }
 
     // Status precedence (R28 amended). `'cancelled'` outranks everything: it is
@@ -1147,7 +1333,9 @@ class WorldImpl implements World {
     // `pendingCancel` — which nothing read, because status was computed first and
     // the next run resets it. It returned void and left no trace, so a UI gating
     // its Cancel button on `world.running` showed a live control that did nothing.
-    if (this.persistence) await this.persistence.save(this.snapshot());
+    //
+    // Run end always persists whatever changed since the last save (R58).
+    await this.persist();
     if (this.pendingCancel !== undefined) {
       const late = this.pendingCancel;
       this.pendingCancel = undefined;
@@ -1172,7 +1360,8 @@ class WorldImpl implements World {
         despawned: [],
       });
       this.stepCount += 1;
-      if (this.persistence) await this.persistence.save(this.snapshot());
+      this.markChanged();
+      await this.persist();
     }
 
     // Status precedence (R28 amended). `'cancelled'` is scoped to THIS run, plus
@@ -1202,6 +1391,81 @@ class WorldImpl implements World {
               ? 'pending'
               : 'done';
     return { status, steps, pending: this.pending(), errors: this.collectErrors() };
+  }
+
+  // ------------------------------------------------------------ persistence
+
+  async claim(): Promise<void> {
+    const adapter = this.persistence;
+    if (adapter?.fence === undefined) {
+      throw new LangECSError(
+        'world.claim() needs a persistence adapter implementing fence() (R57). ' +
+          'Without one there is nothing to arbitrate between two workers, and claiming would ' +
+          'give a false sense of exclusivity.',
+      );
+    }
+    // Staleness is checked BEFORE the fence, because the fence alone cannot catch
+    // it. A monotonic fence refuses a step at or below one already claimed — but a
+    // worker resuming an OLDER snapshot claims a LOWER step, and if it gets there
+    // first nothing has been claimed yet, so it is granted. It would then only be
+    // refused at its first save, by which time its side effects have run: exactly
+    // the failure `claim()` exists to prevent, one boundary further out.
+    //
+    // The adapter already knows the answer, and this costs one read per resume.
+    const latest = await adapter.load(this.id);
+    if (latest !== null && latest.step > this.stepCount) {
+      throw new StaleSnapshotError(this.stepCount, latest.step);
+    }
+    const granted = await adapter.fence(this.id, this.stepCount);
+    if (!granted) throw new FenceError(this.id, this.stepCount);
+    this.ownedStep = this.stepCount;
+  }
+
+  /** Whether the configured cadence persists at this committed step (R58). */
+  private shouldSaveAtStep(step: number): boolean {
+    if (this.persistence === undefined) return false;
+    if (this.saveEvery === 'quiescence') return false;
+    if (this.saveEvery === 'barrier') return true;
+    // A non-positive interval would divide by zero / save never; treat it as
+    // every step rather than silently disabling persistence.
+    const every = Math.max(1, Math.floor(this.saveEvery));
+    return step % every === 0;
+  }
+
+  /**
+   * Persists the current boundary, honouring the fence when enabled (R57).
+   *
+   * The fence is checked immediately before the write, not at load: that is the
+   * point where divergence would actually become durable, and it is already an
+   * async boundary the engine awaits. Losing the fence rejects the run — the
+   * world stops rather than keep writing history nobody will read.
+   *
+   * Skips entirely when nothing has been committed since the last save. That
+   * also removes a redundant write the engine always used to make (the final
+   * step was persisted at its barrier and again at run end); harmless against an
+   * idempotent adapter, but a monotonic fence would refuse the world's own second
+   * claim on the same step. Tracked by revision rather than step number, because
+   * a cancellation boundary (R50) changes state *without* advancing the step.
+   */
+  private async persist(): Promise<void> {
+    const adapter = this.persistence;
+    if (adapter === undefined) return;
+    if (this.revision === this.savedRevision) return;
+    const snapshot = this.snapshot();
+    // Re-claiming a step this world already holds is skipped, not re-fenced.
+    // The fence is keyed on the STEP while the save is keyed on the REVISION, and
+    // those clocks disagree at any boundary that changes state without advancing
+    // the step — a cancellation, most obviously. Without this, cancelling a fenced
+    // world made it fence ITSELF out of its own step: the run rejected with
+    // `FenceError` naming a nonexistent rival, and the cancellation was never
+    // persisted, so the advice to "discard it and reload" resumed a live world.
+    if (this.fenced && adapter.fence !== undefined && snapshot.step !== this.ownedStep) {
+      const granted = await adapter.fence(this.id, snapshot.step);
+      if (!granted) throw new FenceError(this.id, snapshot.step);
+      this.ownedStep = snapshot.step;
+    }
+    await adapter.save(snapshot);
+    this.savedRevision = this.revision;
   }
 
   // -------------------------------------------------------- pair execution
@@ -1625,7 +1889,7 @@ class WorldImpl implements World {
               });
               break;
             }
-            const name = op.component.componentName;
+            const name = componentNameOf(op.component);
             const current = stagedLookup(op.entity, name);
             let kind: 'set' | 'merge' = 'set';
             let next = op.value;
@@ -1646,7 +1910,7 @@ class WorldImpl implements World {
               });
               break;
             }
-            const name = op.component.componentName;
+            const name = componentNameOf(op.component);
             if (stagedLookup(op.entity, name).present) stageDelete(op.entity, name, pair);
             break;
           }
@@ -1741,6 +2005,7 @@ class WorldImpl implements World {
     for (const item of staged) {
       const comps = this.entities.get(item.entity);
       if (!comps) continue; // unreachable: staged targets exist or were shelled
+      this.forgetPreserved(item.entity, item.name);
       if (item.op === 'set') comps.set(item.name, item.value);
       else comps.delete(item.name);
       changes.push(item.change);
@@ -1751,6 +2016,7 @@ class WorldImpl implements World {
     for (const id of [...despawnSet].sort((a, b) => a - b)) {
       if (!this.entities.has(id)) continue;
       this.entities.delete(id);
+      this.preserved.delete(id);
       despawned.push(id);
       for (const entityMap of this.dirt.values()) entityMap.delete(id);
     }
@@ -1836,6 +2102,11 @@ class WorldImpl implements World {
     const entities = this.sortedEntityIds().map((id) => {
       const comps = this.entities.get(id);
       const record: Record<string, unknown> = {};
+      // Unresolved components from a non-strict load are written back first
+      // (R55), so a live component of the same name always wins — but nothing
+      // another deployment version owns is silently destroyed by a round-trip.
+      const kept = this.preserved.get(id);
+      if (kept) Object.assign(record, kept);
       if (comps) {
         for (const [name, value] of comps) {
           const def = getComponentByName(name);
@@ -1854,37 +2125,166 @@ class WorldImpl implements World {
       }
     }
     // JSON round-trip: detaches the snapshot from live state and enforces R3/R35.
-    return JSON.parse(
-      JSON.stringify({
-        version: 1 as const,
-        worldId: this.id,
-        step: this.stepCount,
-        nextEntityId: this.nextEntityId,
-        entities,
-        pendingPairs,
-      }),
-    ) as Snapshot;
+    const envelope: Snapshot = {
+      version: 1 as const,
+      worldId: this.id,
+      step: this.stepCount,
+      nextEntityId: this.nextEntityId,
+      entities,
+      pendingPairs,
+    };
+    // Omitted entirely at version 0 so worlds that never opted in keep writing
+    // byte-identical snapshots (R54).
+    if (this.recipeVersion !== 0) envelope.recipeVersion = this.recipeVersion;
+    return JSON.parse(JSON.stringify(envelope)) as Snapshot;
   }
 
-  load(snapshot: Snapshot): void {
+  migration(from: number, to: number, fn: Migration): void {
+    // R54 says the chain is walked ASCENDING; nothing enforced it, so a
+    // 1->9 plus 9->3 pair would happily walk a v1 snapshot up past the world's own
+    // version and back down, and `canLoad` would call it fine — the very thing R54
+    // refuses when it appears on the envelope.
+    if (to <= from) {
+      throw new LangECSError(
+        `Migration ${from} -> ${to} does not move forward. Migrations form a single ascending ` +
+          `chain (R54): a downgrade path cannot be replayed onto newer code, and a cycle would ` +
+          `never converge.`,
+      );
+    }
+    if (to > this.recipeVersion) {
+      throw new LangECSError(
+        `Migration ${from} -> ${to} overshoots this world's recipeVersion ${this.recipeVersion} ` +
+          `(R54). Raise the world's recipeVersion, or split the step — otherwise the chain ` +
+          `migrates past the schema this build understands and then fails on a hop nobody wrote.`,
+      );
+    }
+    const existing = this.migrations.get(from);
+    if (existing && existing.to !== to) {
+      throw new DuplicateMigrationError(from, existing.to, to);
+    }
+    this.migrations.set(from, { to, fn });
+  }
+
+  /**
+   * Walks the forward migration chain (R54). Returns the migrated snapshot and
+   * the steps taken; `undefined` chain means no path exists.
+   */
+  private migrateChain(
+    snapshot: Snapshot,
+  ): { snapshot: Snapshot; applied: { from: number; to: number }[] } | { gap: number } {
+    let current = snapshot.recipeVersion ?? 0;
+    if (current === this.recipeVersion) return { snapshot, applied: [] };
+    let working = snapshot;
+    const applied: { from: number; to: number }[] = [];
+    // A bound of one hop per registered migration: a cyclic or self-referential
+    // chain can never spin the engine.
+    for (let hops = 0; hops <= this.migrations.size; hops++) {
+      if (current === this.recipeVersion) return { snapshot: working, applied };
+      const step = this.migrations.get(current);
+      if (!step) return { gap: current };
+      // Migrations receive a detached copy, so mutate-and-return is safe (R54).
+      working = step.fn(JSON.parse(JSON.stringify(working)) as Snapshot);
+      applied.push({ from: current, to: step.to });
+      current = step.to;
+    }
+    return { gap: current };
+  }
+
+  canLoad(snapshot: Snapshot): LoadCheck {
+    if (snapshot.version !== SNAPSHOT_VERSION) {
+      return {
+        ok: false,
+        formatVersion: { found: snapshot.version, supported: SNAPSHOT_VERSION },
+        components: [],
+        systems: [],
+      };
+    }
+    const found = snapshot.recipeVersion ?? 0;
+    if (found > this.recipeVersion) {
+      return {
+        ok: false,
+        recipeVersion: { found, supported: this.recipeVersion },
+        components: [],
+        systems: [],
+      };
+    }
+    let chain: ReturnType<typeof this.migrateChain>;
+    try {
+      chain = this.migrateChain(snapshot);
+    } catch (err) {
+      // A migration is user code and can throw. `canLoad` is the deploy gate, so a
+      // broken migration is precisely what it should REPORT — crashing the
+      // pipeline with a raw user error would break R56's no-throw contract at the
+      // one moment it matters.
+      return {
+        ok: false,
+        migrationFailed: { error: serializeError(err) },
+        components: [],
+        systems: [],
+      };
+    }
+    if ('gap' in chain) {
+      return {
+        ok: false,
+        missingMigration: { from: chain.gap, to: this.recipeVersion },
+        components: [],
+        systems: [],
+      };
+    }
+    // Checked against the MIGRATED snapshot: a rename that a migration fixes is
+    // not a missing component, which is the entire point of running the chain
+    // before validation.
+    const components = new Set<string>();
+    for (const entity of chain.snapshot.entities) {
+      for (const name of Object.keys(entity.components)) {
+        if (!getComponentByName(name)) components.add(name);
+      }
+    }
+    const systems = new Set<string>();
+    for (const pair of chain.snapshot.pendingPairs) {
+      if (!this.systemsByKey.has(pair.system)) systems.add(pair.system);
+    }
+    if (components.size === 0 && systems.size === 0) return { ok: true };
+    return { ok: false, components: [...components], systems: [...systems] };
+  }
+
+  load(snapshot: Snapshot, opts?: { strict?: boolean; expectedStep?: number }): LoadReport {
     this.assertIdle('load a snapshot');
     // Fail loudly on a format we don't understand rather than misreading a
     // future/foreign snapshot against v1 field assumptions (R36).
     if (snapshot.version !== SNAPSHOT_VERSION) {
       throw new SnapshotVersionError(snapshot.version, SNAPSHOT_VERSION);
     }
+    if (opts?.expectedStep !== undefined && snapshot.step !== opts.expectedStep) {
+      throw new StaleSnapshotError(snapshot.step, opts.expectedStep);
+    }
+
+    // Migrations run BEFORE any name is resolved (R54) — that ordering is what
+    // lets a migration rename a component this build no longer defines.
+    const foundVersion = snapshot.recipeVersion ?? 0;
+    if (foundVersion > this.recipeVersion) {
+      throw new RecipeVersionError(foundVersion, this.recipeVersion, true);
+    }
+    const chain = this.migrateChain(snapshot);
+    if ('gap' in chain) throw new RecipeVersionError(chain.gap, this.recipeVersion, false);
+    const migrated = chain.snapshot;
+    const report: LoadReport = { migrated: chain.applied, preserved: [], droppedPairs: [] };
+
+    const strict = opts?.strict ?? true;
     const missingComponents = new Set<string>();
-    for (const entity of snapshot.entities) {
+    for (const entity of migrated.entities) {
       for (const name of Object.keys(entity.components)) {
         if (!getComponentByName(name)) missingComponents.add(name);
       }
     }
-    if (missingComponents.size > 0) throw new UnknownComponentError([...missingComponents]);
+    if (strict && missingComponents.size > 0) {
+      throw new UnknownComponentError([...missingComponents]);
+    }
     const missingSystems = new Set<string>();
-    for (const pair of snapshot.pendingPairs) {
+    for (const pair of migrated.pendingPairs) {
       if (!this.systemsByKey.has(pair.system)) missingSystems.add(pair.system);
     }
-    if (missingSystems.size > 0) throw new UnknownSystemError([...missingSystems]);
+    if (strict && missingSystems.size > 0) throw new UnknownSystemError([...missingSystems]);
 
     // Wholesale replacement of the previous timeline — including the flight
     // recorder (R36/R42 amended): a trace that mixed steps from two histories
@@ -1892,12 +2292,27 @@ class WorldImpl implements World {
     // failed load leaves the old trace intact.)
     this.traceBuf = [];
     this.entities = new Map();
-    for (const entity of [...snapshot.entities].sort((a, b) => a.id - b.id)) {
+    this.preserved = new Map();
+    for (const entity of [...migrated.entities].sort((a, b) => a.id - b.id)) {
       const comps = new Map<string, unknown>();
       for (const [name, raw] of Object.entries(entity.components)) {
         const def = getComponentByName(name);
         const detached = JSON.parse(JSON.stringify({ raw })).raw as unknown;
-        if (def?.deserialize) {
+        if (def === undefined) {
+          // Non-strict only (a strict load already threw). Kept as inert data:
+          // it joins no query and generates no dirt, but it survives the next
+          // snapshot, so a rolling deploy cannot delete a component the other
+          // version still owns (R55).
+          let kept = this.preserved.get(entity.id);
+          if (!kept) {
+            kept = {};
+            this.preserved.set(entity.id, kept);
+          }
+          kept[name] = detached;
+          report.preserved.push({ entity: entity.id, component: name });
+          continue;
+        }
+        if (def.deserialize) {
           try {
             comps.set(name, def.deserialize(detached));
           } catch (err) {
@@ -1909,10 +2324,19 @@ class WorldImpl implements World {
       }
       this.entities.set(entity.id, comps);
     }
-    this.stepCount = snapshot.step;
-    this.nextEntityId = snapshot.nextEntityId;
+    this.stepCount = migrated.step;
+    this.nextEntityId = migrated.nextEntityId;
     this.dirt = new Map();
-    for (const pair of snapshot.pendingPairs) this.markDirt(pair.system, pair.entity, pair.reason);
+    for (const pair of migrated.pendingPairs) {
+      if (!this.systemsByKey.has(pair.system)) {
+        // Unlike a component value there is nowhere to keep this: dirt names a
+        // system that must be scheduled. Reported rather than silently dropped —
+        // the work it described will not run (R55).
+        report.droppedPairs.push({ ...pair } as PendingPair);
+        continue;
+      }
+      this.markDirt(pair.system, pair.entity, pair.reason);
+    }
     // Match sets reflect the restored committed state; no dirt is generated so
     // the loaded world continues identically from the boundary (R36).
     this.matched = new Map();
@@ -1923,7 +2347,13 @@ class WorldImpl implements World {
       }
       this.matched.set(sys.key, matchSet);
     }
+    // A just-loaded boundary came FROM storage, so it needs no write of its own;
+    // marking it saved keeps a fenced resume from immediately re-claiming the
+    // step it just read (R57).
+    this.markChanged();
+    this.savedRevision = this.revision;
     this.notifyExternal({ kind: 'load' });
+    return report;
   }
 }
 
