@@ -47,26 +47,20 @@ export const Notes = defineComponent<string[]>({ name: 'research:Notes', reducer
 export const RevisionRequest = defineComponent<string>({ name: 'research:RevisionRequest' });
 
 // --------------------------------------------------------- token accounting
+//
+// This example is where the budget-watchdog pattern was worked out, and stdlib
+// now ships it (R63) — so the hand-rolled components are gone and these are
+// re-exports. What is left here is the part that is genuinely ours: WHICH
+// entities the brake has to reach (see `stampOn` in team.ts).
 
-export type Spend = { system: string; tokens: number };
-
-/** Ledger of every model call's cost; appends are what wake tokenBudget. */
-export const TokenUsage = defineComponent<Spend[]>({
-  name: 'research:TokenUsage',
-  reducer: append,
-});
-
-/** Max total tokens for the run; plain data, so tests shrink it to 1. */
-export const TokenBudget = defineComponent<number>({ name: 'research:TokenBudget' });
-
-/** Stamped on the blackboard AND every researcher once the ledger exceeds the
- * budget. Every model-calling system excludes it with Not(), so its arrival
- * unmatches them all and the world quiesces with whatever work is committed. */
-export const BudgetExceeded = defineComponent<{ spent: number; budget: number }>({
-  name: 'research:BudgetExceeded',
-});
-
-export const totalTokens = (ledger: Spend[]): number => ledger.reduce((n, s) => n + s.tokens, 0);
+export {
+  BudgetExceeded,
+  type Spend,
+  spendOf,
+  spentTokens,
+  TokenBudget,
+  TokenUsage,
+} from '@langecs/stdlib';
 
 /** The one shared chat model, registered by main.ts or the test (typed ref). */
 export const ResearchModel = defineResource<Model>('model:research');

@@ -18,7 +18,7 @@ import {
   type SystemCtx,
   type World,
 } from '@langecs/core';
-import { extractJson } from '@langecs/stdlib';
+import { budgetWatchdog, extractJson, Goal, Phase, spendOf } from '@langecs/stdlib';
 import {
   Answer,
   Approved,
@@ -34,7 +34,6 @@ import {
   SubQuestion,
   TokenBudget,
   TokenUsage,
-  totalTokens,
 } from './blackboard';
 
 /** The shared model, wrapped so each call's cost lands on the blackboard's
@@ -45,10 +44,10 @@ function meteredModel(ctx: SystemCtx, board: EntityTarget, system: string): Mode
   return {
     async generate(req) {
       const result = await inner.generate(req);
-      const reported = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
-      const chars =
-        req.messages.reduce((n, m) => n + m.content.length, 0) + result.message.content.length;
-      ctx.write(board, TokenUsage, [{ system, tokens: reported || Math.ceil(chars / 4) }], 'add');
+      // stdlib's `spendOf` does the reported-or-estimated arithmetic (R63). It
+      // takes the whole REQUEST: the prompt is usually the larger half, and the
+      // old character count omitted the system prompt and tool-call args.
+      ctx.write(board, TokenUsage, [spendOf(system, result, req)], 'add');
       return result;
     },
   };
@@ -79,6 +78,7 @@ const investigate = defineSystem({
     // Findings append reducer merges same-barrier reporters deterministically.
     const finding: Finding = { researcher: e.id, index: sub.index, text, revised: false };
     ctx.write(sub.board, Findings, [finding], 'add');
+    e.set(Phase, 'reported');
   },
 });
 
@@ -105,6 +105,7 @@ const revise = defineSystem({
     const finding: Finding = { researcher: e.id, index: sub.index, text, revised: true };
     ctx.write(sub.board, Findings, [finding], 'add');
     e.remove(RevisionRequest);
+    e.set(Phase, 'revised');
   },
 });
 
@@ -142,9 +143,18 @@ export const planner = defineSystem({
     );
     const plan = subQuestions.slice(0, 4);
     for (const [index, text] of plan.entries()) {
-      ctx.spawn(researcher, SubQuestion({ board: e.id, index, text }));
+      // Narration (R64) rides along with the spawn: nothing queries Goal or
+      // Phase, so this is purely so a human — or the devtools inspector, or
+      // main.ts — can read what each researcher is for.
+      ctx.spawn(
+        researcher,
+        SubQuestion({ board: e.id, index, text }),
+        Goal(`research sub-question ${index}: ${text}`),
+        Phase('drafting'),
+      );
     }
     e.set(Plan, plan);
+    e.set(Phase, 'researching');
   },
 });
 
@@ -186,11 +196,15 @@ export const critic = defineSystem({
     const flagged = (verdict.weak ?? []).filter((w) => latest.get(w.index)?.revised === false);
     if (flagged.length === 0) {
       e.add(Approved); // green light: the synthesizer's query newly matches
+      e.set(Phase, 'synthesizing');
       return;
     }
     for (const w of flagged) {
       const finding = latest.get(w.index);
-      if (finding !== undefined) ctx.write(finding.researcher, RevisionRequest, w.reason, 'set');
+      if (finding !== undefined) {
+        ctx.write(finding.researcher, RevisionRequest, w.reason, 'set');
+        ctx.write(finding.researcher, Phase, 'revising', 'set');
+      }
     }
     // No write to the blackboard here: this pair's dirt is consumed, and the
     // critic re-fires only when a revised finding appends (foreign dirt).
@@ -209,24 +223,19 @@ export const synthesizer = defineSystem({
       messages: [{ role: 'user', content: board }],
     });
     e.set(Answer, result.message.content);
+    e.set(Phase, 'answered');
   },
 });
 
-// Crosscutting watchdog (world.use — global, no agent scoping): re-tallies the
-// ledger after every model call, vetoes while under budget, and once over it
-// stamps BudgetExceeded everywhere a model system could fire. The brake has
-// one step of lag by design — calls already executing when the ledger tips
-// still land; nothing model-shaped fires after the stamp commits.
-export const tokenBudget = defineSystem({
-  name: 'tokenBudget',
-  query: [TokenUsage, TokenBudget, Not(BudgetExceeded)],
-  when: (e) => totalTokens(e.get(TokenUsage)) > e.get(TokenBudget),
-  run: (e, ctx) => {
-    const stamp = { spent: totalTokens(e.get(TokenUsage)), budget: e.get(TokenBudget) };
-    e.set(BudgetExceeded, stamp);
-    for (const r of ctx.world.query(researcher.tag)) ctx.write(r, BudgetExceeded, stamp, 'set');
-  },
-});
+// Crosscutting watchdog, now stdlib's (R63) rather than hand-rolled here: it
+// re-tallies the ledger after every model call, vetoes while under budget, and
+// once over it stamps BudgetExceeded on the board plus every entity matching
+// `stampOn`. Only that last part was ever example-specific — the brake has to
+// reach the researchers, or their `Not(BudgetExceeded)` guards never unmatch.
+//
+// The brake has one step of lag by design: calls already executing when the
+// ledger tips still land; nothing model-shaped fires after the stamp commits.
+export const tokenBudget = budgetWatchdog({ stampOn: [researcher.tag] });
 
 // --------------------------------------------------------------------- setup
 
@@ -236,5 +245,8 @@ export const DEFAULT_BUDGET = 50_000;
  * run starts when the caller sends a Question to it. */
 export function spawnResearchTeam(world: World, budget: number = DEFAULT_BUDGET): EntityHandle {
   for (const system of [planner, critic, synthesizer, tokenBudget]) world.use(system);
-  return world.spawn(TokenBudget(budget));
+  // `Goal`/`Phase` have no scheduling role at all (R64) — they exist so
+  // `narrateWorld(world)` can say what the team is doing at any moment, which is
+  // the honest answer to "emergent control flow reads worse than drawn edges".
+  return world.spawn(TokenBudget(budget), Goal('answer the research question'), Phase('planning'));
 }
