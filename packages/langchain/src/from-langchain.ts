@@ -1,6 +1,6 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { AIMessageChunk } from '@langchain/core/messages';
-import type { Model, ModelRequest } from '@langecs/core';
+import { type Model, type ModelRequest, throwIfAborted } from '@langecs/core';
 import { toLangChainMessages, toLangChainTools, toModelResult } from './convert';
 
 /**
@@ -18,7 +18,9 @@ import { toLangChainMessages, toLangChainTools, toModelResult } from './convert'
  *
  * Note: call-time sampling controls (`req.temperature`, `req.maxTokens`,
  * `req.topP`, `req.seed`, …) are ignored — LangChain chat models configure
- * sampling at construction time and expose no portable call-time option. The
+ * sampling at construction time and expose no portable call-time option.
+ * `req.signal` is **not** in that group: it is forwarded as the call's `signal`
+ * option (R49), so cancellation reaches the provider request. The
  * adapter does surface reasoning content (`Msg.thinking`) when the model emits
  * it (DeepSeek `reasoning_content`, Anthropic thinking blocks).
  */
@@ -33,20 +35,37 @@ export function fromLangChain(chatModel: BaseChatModel): Model {
     return chatModel.bindTools(toLangChainTools(req.tools));
   };
 
+  // Cooperative cancellation (R49): LangChain takes `signal` as a call option
+  // on every runnable, so an aborted signal stops the provider request.
+  // Omitted entirely when unset, so callers see no behavior change.
+  const callOptions = (req: ModelRequest): { signal?: AbortSignal } | undefined =>
+    req.signal === undefined ? undefined : { signal: req.signal };
+
   return {
     async generate(req) {
-      const message = await bound(req).invoke(toLangChainMessages(req));
+      // R49 is enforced at the adapter boundary in three parts, rather than
+      // trusting the provider: check on entry, so an already-aborted signal
+      // never produces a fresh reply; forward it as the call's `signal` option,
+      // so an abort landing mid-flight stops the provider request; then check
+      // again before delivering, so a provider that ignores the signal still
+      // cannot resolve into a cancelled caller.
+      throwIfAborted(req.signal);
+      const message = await bound(req).invoke(toLangChainMessages(req), callOptions(req));
+      throwIfAborted(req.signal);
       return toModelResult(message);
     },
 
     async stream(req, onChunk) {
-      const stream = await bound(req).stream(toLangChainMessages(req));
+      // Same three-point rule as `generate`.
+      throwIfAborted(req.signal);
+      const stream = await bound(req).stream(toLangChainMessages(req), callOptions(req));
       let final: AIMessageChunk | undefined;
       for await (const chunk of stream) {
         const text = chunk.text;
         if (text.length > 0) onChunk({ text });
         final = final === undefined ? chunk : final.concat(chunk);
       }
+      throwIfAborted(req.signal);
       if (final === undefined) {
         throw new Error('@langecs/langchain: chat model stream yielded no chunks.');
       }

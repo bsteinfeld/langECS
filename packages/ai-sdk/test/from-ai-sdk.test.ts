@@ -135,6 +135,62 @@ describe('fromAiSdk generate()', () => {
     expect(call.stopSequences).toEqual(['STOP']);
   });
 
+  test('R49 forwards req.signal to the provider call as abortSignal', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    const controller = new AbortController();
+    await model.generate({
+      messages: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    // Cancellation has to reach the transport, not just the awaiting engine:
+    // the SDK aborts the HTTP request from this signal.
+    expect(mock.doGenerateCalls[0]?.abortSignal).toBe(controller.signal);
+  });
+
+  test('R49 an aborted signal rejects the call', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'never delivered' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      model.generate({ messages: [{ role: 'user', content: 'hi' }], signal: controller.signal }),
+    ).rejects.toThrow();
+  });
+
+  test('R49 sends no abort signal to the provider when req.signal is unset', async () => {
+    const mock = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: 'stop' },
+        usage,
+        warnings: [],
+      },
+    });
+    const model = fromAiSdk(mock);
+    await model.generate({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(mock.doGenerateCalls[0]?.abortSignal).toBeUndefined();
+    // Deliberately `toBeUndefined()` and not `'abortSignal' in call`: the
+    // adapter omits the key (conditional spread in `callOptions`), but the SDK
+    // normalizes its own provider-call object with `abortSignal:` always
+    // present, so at this observation point the key exists either way. What is
+    // assertable — and what matters — is that no signal reaches the provider.
+  });
+
   test('maps reasoning content to Msg.thinking', async () => {
     const mock = new MockLanguageModelV3({
       doGenerate: {
@@ -287,5 +343,132 @@ describe('fromAiSdk stream()', () => {
     await expect(
       model.stream?.({ messages: [{ role: 'user', content: 'hi' }] }, () => {}),
     ).rejects.toThrow('boom');
+  });
+});
+
+describe('fromAiSdk cancellation (R49)', () => {
+  /**
+   * A provider that ignores `abortSignal` entirely: it aborts the caller's
+   * controller mid-flight and then returns a perfectly normal reply. Real
+   * providers vary in how faithfully they honour the signal, and R49's
+   * "reject, never resolve" must not depend on their good behaviour.
+   */
+  const ignoresSignalOnGenerate = (abortNow: () => void) =>
+    new MockLanguageModelV3({
+      doGenerate: async () => {
+        abortNow();
+        return {
+          content: [{ type: 'text' as const, text: 'late reply' }],
+          finishReason: { unified: 'stop' as const, raw: 'stop' },
+          usage,
+          warnings: [],
+        };
+      },
+    });
+
+  test('generate() rejects when the signal aborts mid-flight, even if the provider ignores it', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled mid-flight');
+    const model = fromAiSdk(ignoresSignalOnGenerate(() => controller.abort(reason)));
+    await expect(
+      model.generate({ messages: [{ role: 'user', content: 'hi' }], signal: controller.signal }),
+    ).rejects.toBe(reason);
+  });
+
+  // Contract test, not a test of the adapter's own check: `streamText` already
+  // rejects with `abortSignal.reason` here. It pins R49 for the stream path
+  // regardless of which layer enforces it, so a future SDK release that starts
+  // resolving instead fails loudly — the adapter's post-loop check is the
+  // backstop that keeps the guarantee independent of the dependency.
+  test('stream() rejects rather than resolving a result built from a cancelled call', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled mid-flight');
+    // A stream that completes normally, having aborted the caller partway.
+    const mock = new MockLanguageModelV3({
+      doStream: {
+        stream: new ReadableStream<StreamPart>({
+          start(c) {
+            c.enqueue({ type: 'stream-start', warnings: [] } as StreamPart);
+            c.enqueue({ type: 'text-start', id: 't1' } as StreamPart);
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'Partial' } as StreamPart);
+            c.enqueue({ type: 'text-end', id: 't1' } as StreamPart);
+            c.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: 'stop' },
+              usage,
+            } as StreamPart);
+            c.close();
+            controller.abort(reason);
+          },
+        }),
+      },
+    });
+    await expect(
+      fromAiSdk(mock).stream?.(
+        { messages: [{ role: 'user', content: 'hi' }], signal: controller.signal },
+        () => {},
+      ),
+    ).rejects.toBe(reason);
+  });
+
+  test("stream() surfaces the signal's own reason on an SDK 'abort' part", async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled mid-stream');
+    const mock = new MockLanguageModelV3({
+      doStream: {
+        stream: new ReadableStream<StreamPart>({
+          async start(c) {
+            c.enqueue({ type: 'stream-start', warnings: [] } as StreamPart);
+            c.enqueue({ type: 'text-start', id: 't1' } as StreamPart);
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'Par' } as StreamPart);
+            await new Promise((r) => setTimeout(r, 10));
+            // The SDK turns this into an 'abort' part and closes the stream
+            // gracefully; the adapter must reject with this reason, not a
+            // generic error, so `err.name`/custom reasons survive.
+            controller.abort(reason);
+            await new Promise((r) => setTimeout(r, 20));
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'tial' } as StreamPart);
+            c.close();
+          },
+        }),
+      },
+    });
+    const chunks: string[] = [];
+    await expect(
+      fromAiSdk(mock).stream?.(
+        { messages: [{ role: 'user', content: 'hi' }], signal: controller.signal },
+        (d) => {
+          if (d.text) chunks.push(d.text);
+        },
+      ),
+    ).rejects.toBe(reason);
+    expect(chunks).toEqual(['Par']);
+  });
+
+  test('stream() abort with no reason rejects with an AbortError, not a generic Error', async () => {
+    const controller = new AbortController();
+    const mock = new MockLanguageModelV3({
+      doStream: {
+        stream: new ReadableStream<StreamPart>({
+          async start(c) {
+            c.enqueue({ type: 'stream-start', warnings: [] } as StreamPart);
+            c.enqueue({ type: 'text-start', id: 't1' } as StreamPart);
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'Par' } as StreamPart);
+            await new Promise((r) => setTimeout(r, 10));
+            controller.abort();
+            await new Promise((r) => setTimeout(r, 20));
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'tial' } as StreamPart);
+            c.close();
+          },
+        }),
+      },
+    });
+    // Consumers routinely switch on `err.name === 'AbortError'`.
+    await expect(
+      fromAiSdk(mock).stream?.(
+        { messages: [{ role: 'user', content: 'hi' }], signal: controller.signal },
+        () => {},
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

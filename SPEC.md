@@ -194,16 +194,26 @@ const callLLM = defineSystem({
   ```ts
   type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string;
                toolCalls?: { id: string; name: string; args: unknown }[];
-               toolCallId?: string; name?: string; meta?: Record<string, unknown> }
+               toolCallId?: string; name?: string;
+               thinking?: string;                       // reasoning text, output-only, never sent back
+               meta?: Record<string, unknown> }
   type ToolSpec = { name: string; description?: string; parameters?: Record<string, unknown> /* JSON Schema */ }
   interface ModelRequest { messages: Msg[]; system?: string; tools?: ToolSpec[];
-                           temperature?: number; maxTokens?: number }
+                           temperature?: number; maxTokens?: number;
+                           // sampling controls: forwarded by adapters only when set
+                           topP?: number; topK?: number;
+                           frequencyPenalty?: number; presencePenalty?: number;
+                           seed?: number; stopSequences?: string[];
+                           signal?: AbortSignal }       // cooperative cancellation (R49)
   interface ModelResult { message: Msg; usage?: { inputTokens?: number; outputTokens?: number };
                           finishReason?: string; raw?: unknown }
   interface Model { generate(req: ModelRequest): Promise<ModelResult>;
                     stream?(req: ModelRequest, onChunk: (d: { text?: string }) => void): Promise<ModelResult> }
   ```
-- **R44** `scriptedModel(turns: (Msg | ((req: ModelRequest) => Msg))[])` → deterministic `Model` for tests: returns turns in order (supports `stream` by chunking content); throws if called more times than scripted. Exported from core.
+- **R44** `scriptedModel(turns, opts?)` → deterministic `Model` for tests: returns turns in order (supports `stream` by chunking content); throws if called more times than scripted. Exported from core.
+  `turns: (Msg | ((req: ModelRequest) => Msg | Promise<Msg>))[]` — a turn function may return a promise, so a test can script a *slow* or never-settling call (the deterministic way to exercise cancellation (R49) and timeout scenarios with zero network). `opts?: { delayMs?: number }` delays every turn by `delayMs`, interruptibly.
+  *(amended)* `scriptedModel` **honours `req.signal`** (R49) under one invariant: **a turn is consumed only when a reply is delivered.** A call that rejects because its signal aborted — on entry, during a `delayMs` wait, or while an async turn function was still resolving — never consumes a turn; the script advances only when a reply is actually handed back, so the next call receives that same turn. Turn functions are raced against the signal rather than awaited, so a turn that never settles (the way to script a call only a timeout can end) rejects at the abort instead of hanging.
+- **R49** **Cooperative cancellation.** `ModelRequest.signal?: AbortSignal`. The contract for a custom `Model`: check the signal before starting work, forward it to the underlying transport (`fetch`, SDK client), and reject — rather than resolve — when it aborts. Rejecting with the signal's own `reason` is preferred; core exports `CancelledError` (and `throwIfAborted(signal)`) for implementations that have no platform reason to re-throw. Cancellation is cooperative by construction: a `Model` that ignores the signal cannot be interrupted, and the engine never pretends otherwise. Both shipped adapters forward it (`@langecs/ai-sdk` → `abortSignal`, `@langecs/langchain` → the call's `signal` option) — and both also re-check the signal before delivering a result, so a provider that ignores it cannot resolve a fresh reply into a cancelled caller.
 
 ## 12. Required test matrix (deterministic, zero network)
 
@@ -235,6 +245,7 @@ const callLLM = defineSystem({
 | T24 | `wrapSystemRun`: first-registered-outermost composition, `SystemRunInfo` contents, system throw rejects `fn`, wrapper rejection lands as SystemError (R31 parity) |
 | T25 | `onExternalChange`: every kind fires (spawn/write/remove/despawn/load/systems/resource) |
 | T26 | introspection: `systems()` (agent scoping, include/exclude, hasGuard), `resources()`, `listComponents()` flags, `world.running` |
+| T27 | cancellation (R49): `scriptedModel` abort semantics (no turn consumed on abort — entry, `delayMs` wait, or async turn); adapters forward `req.signal` to the provider call; reject-never-resolve holds even against a provider that ignores the signal |
 
 ## 14. Observability & introspection (devtools surface)
 

@@ -40,7 +40,8 @@ result.message; // { role: 'assistant', content: 'hello there' }
 | `role: 'assistant'` (+ `toolCalls`) | `AIMessage` (+ `tool_calls`) |
 | `role: 'tool'` | `ToolMessage` (`tool_call_id` from `toolCallId` — required; missing it throws) |
 
-`ModelRequest.system` is prepended as a `SystemMessage`. On the way back,
+`ModelRequest.system` is prepended as a `SystemMessage`, and `ModelRequest.signal` is
+passed as the call's `signal` option (R49 — see [Limitations](#limitations)). On the way back,
 `tool_calls` map to `toolCalls`, `usage_metadata` to
 `usage.{inputTokens,outputTokens}`, `finish_reason`/`stop_reason` from
 `response_metadata` to `finishReason`, reasoning (`reasoning_content` or
@@ -83,9 +84,15 @@ live token events.
 
 ## Limitations
 
-`ModelRequest.temperature` and `maxTokens` are **ignored**: LangChain chat models
-configure sampling at construction time and expose no portable call-time option. Set
-them on the chat model itself.
+`ModelRequest.temperature` and `maxTokens` — and the other call-time sampling controls
+(`topP`, `topK`, `frequencyPenalty`, `presencePenalty`, `seed`, `stopSequences`) — are
+**ignored**: LangChain chat models configure sampling at construction time and expose no
+portable call-time option. Set them on the chat model itself.
+
+`ModelRequest.signal` is **not** in that group. It is forwarded as the call's `signal`
+option on both `generate()` and `stream()` (R49), so an abort reaches the provider
+request; and the adapter checks the signal itself first, so a signal that has already
+aborted rejects without invoking the model at all.
 
 ## Exports
 
