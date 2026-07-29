@@ -157,9 +157,9 @@ test('fence resolves a concurrent race to exactly one winner (R57)', async () =>
   const dir = await makeDir();
   const adapter = fsAdapter({ dir });
 
-  // The check-and-create is atomic in the kernel (`wx`), so simultaneous claims
-  // cannot both succeed — this is the property a durable adapter has to provide
-  // and that a read-then-write implementation would silently lose.
+  // `wx` is atomic, but only against an identical filename — so this covers
+  // same-step contention only. The different-step case is the one that actually
+  // bit us, and it is the next test.
   const results = await Promise.all(Array.from({ length: 8 }, () => adapter.fence('stampede', 1)));
   expect(results.filter(Boolean)).toHaveLength(1);
 });
@@ -192,4 +192,30 @@ test('a fenced world stops rather than diverge, and the winner keeps its history
   // on disk, which is the whole point.
   const history = await adapter.history('race');
   expect(history.filter((h) => h.step === shared.step + 1)).toHaveLength(1);
+});
+
+test('fence refuses a lower step raced against a higher one (R57)', async () => {
+  const dir = await makeDir();
+  const adapter = fsAdapter({ dir });
+
+  // The case a read-then-write fence silently allowed: two workers at DIFFERENT
+  // steps never contend on the lock filename, so each read the directory before
+  // the other wrote and both were granted — two divergent timelines, no error.
+  const [lower, higher] = await Promise.all([adapter.fence('race', 8), adapter.fence('race', 9)]);
+  expect({ lower, higher }).toEqual({ lower: false, higher: true });
+
+  // The winner keeps its claim and can move forward; the loser stays refused.
+  expect(await adapter.fence('race', 10)).toBe(true);
+  expect(await adapter.fence('race', 8)).toBe(false);
+});
+
+test('fence withdraws a lost claim rather than holding it (R57)', async () => {
+  const dir = await makeDir();
+  const adapter = fsAdapter({ dir });
+
+  await Promise.all([adapter.fence('w', 3), adapter.fence('w', 7)]);
+  // The loser must not leave a lock behind, or step 3 would look claimed to a
+  // later legitimate caller and the directory would accrue phantom claims.
+  expect(await adapter.fence('w', 3)).toBe(false); // still refused (7 is ahead)
+  expect(await adapter.fence('w', 8)).toBe(true);
 });
