@@ -275,9 +275,6 @@ const callLLM = defineSystem({
 | T38 | `strict: false` (R55): an unknown component is preserved and round-trips through the next snapshot; an unknown `pendingPairs` system is dropped **and reported** |
 | T39 | `expectedStep` (R57) throws `StaleSnapshotError` on a mismatch |
 | T40 | fencing (R57): two workers resume one snapshot, exactly one advances and the loser rejects with `FenceError`; `claim()` before running keeps side effects exactly-once (the save-time fence alone does not); `claim()` also rejects a worker holding a snapshot older than the adapter's latest, which the fence alone cannot catch; persisted history has no interleaved timeline; an unfenced world can still rewind and rewrite (R38) |
-| T48 | R58 revision tracking: a run that commits no step still persists changed state; an idle `cancel()` reaches the store, so a reloaded world is still cancelled |
-| T49 | R57 self-claim: cancelling a fenced world does not fence it out of its own step; the fence refuses a lower step raced against a higher one, and a lost claim is withdrawn |
-| T50 | R56/R54/R55 hardening: `canLoad` reports a throwing migration instead of propagating it; non-ascending and overshooting migrations are rejected at registration; a preserved value is evicted once live code writes or removes the name |
 | T41 | `saveEvery` (R58): `'barrier'` writes once per step, `'quiescence'` once per run, `N` every N steps; no boundary is ever written twice |
 | T42 | standard reducers (R59): each merges as documented without mutating inputs; `boundedAppend` caps from either end; a bounded component stays bounded under concurrent same-step writes |
 | T43 | typed events (R60): a typed emit carries `name`, the untyped form does not; the ref check is a brand, so a payload with an `eventName` field is not misread |
@@ -285,6 +282,9 @@ const callLLM = defineSystem({
 | T45 | record/replay (R62): a recorded run replays exactly and order-independently; a prompt edit falls back to ordinal and `strict` refuses; entries are consumed once and results are detached; a replayed run reproduces the original trace shape |
 | T46 | budgets (R63): the watchdog stops a shared budget gracefully (`'done'`, no SystemError) while committed work survives; the brake reaches every `stampOn` spender; an under-budget world is vetoed and writes nothing; `onApproachingCap` fires once |
 | T47 | narration (R64): `narrate` renders goal/phase and lets engine state outrank the app's phase; writing `Phase` fires nothing and adds no step |
+| T48 | R58 revision tracking: a run that commits no step still persists changed state; an idle `cancel()` reaches the store, so a reloaded world is still cancelled |
+| T49 | R57 self-claim: cancelling a fenced world does not fence it out of its own step; the fence refuses a lower step raced against a higher one, and a lost claim is withdrawn |
+| T50 | R56/R54/R55 hardening: `canLoad` reports a throwing migration instead of propagating it; non-ascending and overshooting migrations are rejected at registration; a preserved value is evicted once live code writes or removes the name |
 
 ## 14. Observability & introspection (devtools surface)
 
