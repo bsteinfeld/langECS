@@ -397,7 +397,13 @@ class WorldImpl implements World {
   private pendingCancel: CancellationRecord | undefined;
   /** True once `cancel()` was seen by the current run — reported even with no entities to stamp. */
   private cancelSeen = false;
-  /** In-flight pairs for `runningPairs()` (R53), keyed by pair id. */
+  /**
+   * In-flight pairs for `runningPairs()` (R53), keyed per EXECUTION — not per
+   * pair. The same (system, entity) can legitimately run again (`retry`
+   * re-arms a timed-out pair) while an abandoned body from an earlier step is
+   * still executing; under a shared pair key the new execution overwrote the
+   * zombie's entry, and the zombie's late settlement then deleted the live one.
+   */
   private readonly inFlight = new Map<
     string,
     {
@@ -409,6 +415,8 @@ class WorldImpl implements World {
       abandoned?: boolean;
     }
   >();
+  /** Monotonic executePair counter; never reused, unlike step numbers after `loadStep`. */
+  private execSeq = 0;
 
   constructor(opts?: WorldOptions) {
     this.id = opts?.id ?? 'world';
@@ -977,9 +985,8 @@ class WorldImpl implements World {
       // 0. Cancellation requested mid-step (R50). Stamped here, at a step
       // boundary, rather than inside `cancel()` — mutating committed state from
       // outside a barrier is exactly what R16 forbids, and a snapshot taken
-      // mid-step would no longer be boundary-consistent. The step counter does
-      // NOT advance: like a fully-vetoed iteration, this is a boundary event, so
-      // it is recorded in the trace with no runs and the run ends.
+      // mid-step would no longer be boundary-consistent. Recorded in the trace
+      // as a step with no runs, and the run ends at this boundary.
       const cancellation = this.pendingCancel;
       if (cancellation !== undefined) {
         this.pendingCancel = undefined;
@@ -1234,7 +1241,7 @@ class WorldImpl implements World {
     }
     emit({ type: 'system:start', ...info });
 
-    const key = pairId(exec.sys.key, exec.entity);
+    const key = `${pairId(exec.sys.key, exec.entity)}#${++this.execSeq}`;
     const start = now();
     const tracked: {
       system: string;

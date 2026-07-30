@@ -525,3 +525,76 @@ test('R50 a cancel landing during the run-end save is honoured, not dropped', as
     reason: 'stopped while saving',
   });
 });
+
+test('R53 an abandoned pair stays listed while the same pair re-executes later', async () => {
+  // The same (system, entity) can legitimately run again — `retry` re-arms a
+  // timed-out pair — while the abandoned body from an earlier step is still
+  // executing. Keyed by pair id alone, the new execution overwrote the zombie's
+  // entry and then deleted it at its own settlement, hiding a still-hung body
+  // from the one diagnostic that exists to show it.
+  let calls = 0;
+  const flaky = defineSystem({
+    name: 'flakyRearm',
+    query: [Job],
+    timeoutMs: 5,
+    run: async (e) => {
+      calls += 1;
+      if (calls === 1) await new Promise<void>(() => {}); // first attempt hangs forever
+      e.set(Mark, 'ok');
+    },
+  });
+  const world = createWorld();
+  world.use(flaky);
+  const job = world.spawn(Job({ label: 'x' }));
+
+  await world.run(); // attempt 1 abandoned at its deadline; its body still hangs
+  expect(world.runningPairs().map((p) => [p.system, p.abandoned])).toEqual([['flakyRearm', true]]);
+
+  // Re-arm with an external write; attempt 2 succeeds and R32 clears the record.
+  world.entity(job.id)?.set(Job, { label: 'x2' });
+  expect((await world.run()).status).toBe('done');
+  expect(world.entity(job.id)?.get(Mark)).toBe('ok');
+
+  // The zombie from attempt 1 is genuinely still executing, so it stays listed.
+  expect(world.runningPairs().map((p) => [p.system, p.abandoned])).toEqual([['flakyRearm', true]]);
+});
+
+test('R53 a settling zombie does not delist a live later execution of the same pair', async () => {
+  // The other direction of the same collision: the abandoned body's deferred
+  // cleanup deleted whatever the shared key pointed at — which, once the pair
+  // re-ran, was the LIVE execution's entry.
+  let release: (() => void) | undefined;
+  let calls = 0;
+  let observed: [string, boolean | undefined][] = [];
+  const flaky = defineSystem({
+    name: 'flakyDelist',
+    query: [Job],
+    // Generous enough that attempt 2's own 10ms of work stays well inside it —
+    // attempt 1 is the only one meant to be abandoned here.
+    timeoutMs: 200,
+    run: async (e, ctx) => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return;
+      }
+      // Attempt 2: let the zombie settle mid-flight, then look at the roster.
+      release?.();
+      await delay(10, ctx.signal);
+      observed = world.runningPairs().map((p) => [p.system, p.abandoned]);
+      e.set(Mark, 'ok');
+    },
+  });
+  const world = createWorld();
+  world.use(flaky);
+  const job = world.spawn(Job({ label: 'y' }));
+
+  await world.run(); // attempt 1 abandoned
+  world.entity(job.id)?.set(Job, { label: 'y2' });
+  await world.run(); // attempt 2 runs; zombie settles while it is in flight
+
+  // The live attempt-2 pair was still listed after the zombie settled.
+  expect(observed).toEqual([['flakyDelist', undefined]]);
+});

@@ -55,9 +55,10 @@ world.entity(id)?.get(Cancelled)   // { step: 4, reason: 'user hit stop' }
 `cancel` is the one external mutation that is legal while a run is in flight
 (R16 forbids the rest). It is still barrier-safe: mid-run the stamp is applied as
 an *engine write at the next step boundary*, so the trace and every snapshot stay
-boundary-consistent. It does not advance the step counter — like a fully-vetoed
-iteration, it is a boundary event, and it shows up in the flight recorder with no
-runs and the `Cancelled` writes in `applied`.
+boundary-consistent. That boundary commits state, so it advances the step counter
+like any other commit — the pre-cancel snapshot keeps its own step, and time
+travel can still recover the uncancelled world. It shows up in the flight
+recorder as a step with no runs and the `Cancelled` writes in `applied`.
 
 ### The `Not(Cancelled)` convention
 
@@ -188,8 +189,11 @@ setInterval(() => {
 }, 1_000)
 ```
 
-It is safe to call mid-run, including from inside an observer, and it is empty
-before a run starts and after it settles.
+It is safe to call mid-run, including from inside an observer. It is empty
+before a run starts, and empty after one settles with one deliberate exception:
+a pair the barrier abandoned (R52) stays listed, flagged `abandoned: true`,
+until its body actually settles — a system hung badly enough to be abandoned is
+exactly the thing this exists to show.
 
 ## Testing all of this without a network
 
