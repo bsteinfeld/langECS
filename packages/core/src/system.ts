@@ -106,6 +106,18 @@ export interface SystemCtx {
   resource<T>(name: string): T;
   /** Manually marks (system, entity) — or all systems for the entity — dirty (R24). */
   invalidate(target: EntityTarget, system?: string): void;
+  /**
+   * Cancellation signal for this (pair, step) (R51). Aborts when the world is
+   * cancelled (`world.cancel`, R50) **or** this system's `timeoutMs` elapses
+   * (R52) — never because a sibling pair timed out.
+   *
+   * Pass it to every awaited call the pair makes (`ctx.signal` →
+   * `ModelRequest.signal`, `fetch`, a DB driver) and honour it in long loops
+   * with `throwIfAborted(ctx.signal)`. Doing so is what makes "stop" mean stop:
+   * the engine can stop *waiting* on its own, but only the system can stop the
+   * work.
+   */
+  readonly signal: AbortSignal;
 }
 
 export interface SystemDef<Q extends readonly QueryTerm[] = readonly QueryTerm[]> {
@@ -120,6 +132,18 @@ export interface SystemDef<Q extends readonly QueryTerm[] = readonly QueryTerm[]
    */
   readonly when?: (entity: EntityReadView<Q>, ctx: GuardCtx) => boolean;
   readonly run: (entity: EntityView<Q>, ctx: SystemCtx) => void | Promise<void>;
+  /**
+   * Wall-clock budget for one execution of this system (R52); falls back to the
+   * world's `systemTimeoutMs`. On expiry the engine aborts `ctx.signal`, stops
+   * waiting for the pair, discards its buffered writes, and records a
+   * `SystemTimeoutError` on the entity's `SystemError` — the same path as a
+   * throw (R31), so `retry` can heal it.
+   *
+   * This is the escape from a hung barrier: without it, one system that never
+   * settles stalls the step forever — no commit, no snapshot, and
+   * `world.running` stuck true. Guards are never timed (they are sync).
+   */
+  readonly timeoutMs?: number;
 }
 
 /**

@@ -1,6 +1,6 @@
 # Examples
 
-Sixteen runnable examples, organized as a learning path: minimal starters,
+Seventeen runnable examples, organized as a learning path: minimal starters,
 real-world workflows, multi-agent patterns, and the six LangGraph.js ports that
 gated the v1 experiment — each port's README contains a deliberately honest
 side-by-side comparison with the original, including where the original wins.
@@ -36,7 +36,7 @@ vars take precedence).
 The tests need **no key and no network** — every model turn is scripted:
 
 ```sh
-pnpm -C examples test                          # all thirteen
+pnpm -C examples test                          # every example, offline
 pnpm -C examples exec vitest run react-agent   # one example
 ```
 
@@ -68,6 +68,7 @@ event-stream demo (live tokens, step logging, error events).
 | [code-review-crew](code-review-crew/) | Three reviewer systems share one query, so a single send fans out to three parallel model calls; the step barrier is the join — `Findings` can't be deduped until every reviewer's append commits | `pnpm -C examples code-review-crew` |
 | [rag-qa](rag-qa/) | Retrieval-Augmented Generation as a pipeline: `extractJson` decomposes the question into sub-queries, one retriever entity is spawned per query and they all run in parallel, and an append reducer fans their passages back in before a grounded, cited answer | `pnpm -C examples rag-qa` |
 | [context-window](context-window/) | Keep a long conversation under a token budget with one line — `withMessageWindow` trims what each model call sees while the full transcript stays durable state; shows the honest memory trade-off | `pnpm -C examples context-window` |
+| [cancellation](cancellation/) | Stopping work already in flight: `world.cancel()` stamps the `Cancelled` component so the stop button is just a `Not(Cancelled)` query term, `ctx.signal` cancels the open HTTP requests, and a per-system `timeoutMs` turns one hung source from a permanently stuck barrier into an ordinary error that `retry` heals | `pnpm -C examples cancellation` |
 
 ## Multi-agent
 

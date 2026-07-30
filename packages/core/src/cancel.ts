@@ -64,15 +64,17 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * Prefers the platform's `AbortSignal.any` when present and falls back to a
  * hand-rolled controller, so behavior is identical on runtimes that predate it
- * (R1). Returns the sole input unchanged when there is only one, and an
- * already-aborted signal when any input is already aborted.
+ * (R1). Returns the sole input unchanged when there is only one — the common
+ * case for a pair with no `timeoutMs`, which composes no wrapper at all — and
+ * an already-aborted signal when any input is already aborted.
  *
  * Retention, on the fallback path only: each input carries one listener until
  * the composite aborts, at which point every listener is removed. A composite
  * that *never* aborts therefore retains one listener per input for that input's
- * lifetime — so on runtimes without native `AbortSignal.any`, keep composites
- * short-lived relative to their inputs rather than building one per call from a
- * long-lived signal. Native `AbortSignal.any` has no such retention.
+ * lifetime — so on runtimes without native `AbortSignal.any` (Node < 20.3,
+ * pre-2024 browsers), keep composites short-lived relative to their inputs
+ * rather than building one per call from a long-lived signal. Native
+ * `AbortSignal.any` holds dependents weakly per spec and has no such retention.
  */
 export function anySignal(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
   const present = signals.filter((s): s is AbortSignal => s !== undefined);

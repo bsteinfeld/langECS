@@ -15,7 +15,7 @@ export interface ChangeRecord {
   value?: unknown;
 }
 
-export type RunStatus = 'done' | 'pending' | 'error' | 'idle' | 'limit';
+export type RunStatus = 'cancelled' | 'done' | 'pending' | 'error' | 'idle' | 'limit';
 
 export interface RunResult {
   status: RunStatus;

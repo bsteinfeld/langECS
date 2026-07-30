@@ -17,6 +17,7 @@ no special engine support. Links point to the canonical example for each.
 | **Human-in-the-loop** | Pause for approval, resume later | a system writes `AwaitingHuman` (quiescence = the pause), `world.resume` lifts it; survives process death | [human-in-the-loop](human-in-the-loop/), [support-desk](support-desk/) |
 | **Blackboard** | Collaborators share one entity | a spawned task entity whose components (`Findings`, `Plan`, `Retrieved`) many systems read and reduce into | [research-team](research-team/), [rag-qa](rag-qa/) |
 | **Bounded memory** | Keep long context under budget | `withMessageWindow` trims what each model call sees; durable history stays on the entity | [context-window](context-window/) |
+| **Stop button / deadline** | Halt work already in flight | `world.cancel()` stamps `Cancelled`, so the stop is a `Not(Cancelled)` query term; `ctx.signal` aborts the open call; `timeoutMs` bounds a pair that would otherwise hang the barrier | [cancellation](cancellation/) |
 | **Time travel / fork** | Inspect or branch history | per-step snapshots via a `PersistenceAdapter`; `loadStep` rewinds, `load` into a fresh world forks | [time-travel](time-travel/) |
 
 ## How they compose
