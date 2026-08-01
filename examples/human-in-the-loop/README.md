@@ -54,6 +54,49 @@ There is no interrupt machinery. Five ordinary mechanics compose:
 The pause is *the absence of an eligible system*, and the resume is *two
 component edits*. Both are visible in `world.getTrace()` like any other step.
 
+## What happens when the resuming deploy isn't the one that paused
+
+`resume-safety.test.ts` picks up where the kill-and-resume test stops, because a
+world that can sit paused for a day will eventually be resumed by a *different
+build*. Two failure modes, both asserted:
+
+**A component rename orphans the paused world.** Quiescence is the pause, and
+`world.load` throws on any name it cannot resolve — so shipping a rename while
+someone's approval is parked makes their world permanently unloadable. The
+example ships two vocabularies ([`deploy.ts`](deploy.ts)): v1 writes
+`hitl.ReviewerNote`, v2 renames it to `hitl.ApproverNote` and renames the system
+that writes it. A `world.migration(1, 2, …)` bridges them, and the parked approval
+resumes and completes in the new build:
+
+```ts
+const report = next.load(pausedSnapshot)      // migrated on the way in
+report.migrated                                // [{ from: 1, to: 2 }]
+await next.resume(agent, true)                 // 'done'; the record is deleted once
+```
+
+Migrations run **before** any component name is resolved, which is the only
+reason a build that no longer defines the old name can read the old snapshot. The
+test also shows the deploy that *forgot*: `canLoad` reports
+`missingMigration: { from: 1, to: 2 }` with no side effects, so CI can fail the
+build instead of the user.
+
+**Two workers resume the same approval.** Resuming enqueues a new job that loads
+the snapshot, so a double-click or a queue retry delivers it twice. With
+`fence: true` plus `await world.claim()` before running, one worker wins and the
+other rejects with `FenceError` — and `delete_record` executes **exactly once**
+across both:
+
+```ts
+world.load(snapshot)
+await world.claim()          // FenceError if another worker already owns it
+await world.resume(agent, true)
+```
+
+The ordering is the point. Fencing only at save time would stop the loser from
+writing a divergent timeline, but by then it has already deleted the record.
+Claiming before any step runs is what makes the side effect exactly-once. See
+[schema evolution and resume safety](../../docs/guides/schema-evolution-and-resume-safety.md).
+
 ## Side-by-side with the LangGraph.js original
 
 Originals: [`review-tool-calls.ipynb`](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/review-tool-calls.ipynb)

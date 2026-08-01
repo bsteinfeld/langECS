@@ -319,7 +319,9 @@ trace waterfall.
   [human-in-the-loop](./guides/human-in-the-loop.md),
   [multi-agent patterns](./guides/multi-agent.md),
   [persistence and time travel](./guides/persistence-and-time-travel.md),
-  [streaming and observability](./guides/streaming-and-observability.md).
+  [schema evolution and resume safety](./guides/schema-evolution-and-resume-safety.md),
+  [streaming and observability](./guides/streaming-and-observability.md),
+  [model middleware and fixtures](./guides/model-middleware-and-fixtures.md).
 - [langgraph-comparison.md](./langgraph-comparison.md) — concept-by-concept map
   for LangGraph.js developers, honest about divergences.
 - [prior-art.md](./prior-art.md) — what already exists and what this experiment

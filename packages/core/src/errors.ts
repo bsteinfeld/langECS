@@ -96,6 +96,94 @@ export class SnapshotVersionError extends LangECSError {
   }
 }
 
+/**
+ * Thrown by `world.load()` when a snapshot's `recipeVersion` cannot be brought
+ * to this world's (R54) — either it is newer than this build understands, or no
+ * registered migration bridges the gap.
+ *
+ * The newer-than-us case is deliberately not migratable: only code that knows
+ * the later schema can read it, so a rollback must fail loudly rather than
+ * silently misinterpret live state.
+ */
+export class RecipeVersionError extends LangECSError {
+  readonly found: number;
+  readonly expected: number;
+  /** True when the snapshot is from newer code (a rollback), not a missing migration. */
+  readonly fromFuture: boolean;
+
+  constructor(found: number, expected: number, fromFuture: boolean) {
+    super(
+      fromFuture
+        ? `Snapshot recipeVersion ${found} is newer than this world's ${expected}: it was written by ` +
+            `a later build whose schema this one does not know. Deploy the newer code, or restore an ` +
+            `older snapshot — migrations only run forward (R54).`
+        : `No migration path from snapshot recipeVersion ${found} to this world's ${expected}. ` +
+            `Register the missing step(s) with world.migration(from, to, fn) before loading (R54).`,
+    );
+    this.name = 'RecipeVersionError';
+    this.found = found;
+    this.expected = expected;
+    this.fromFuture = fromFuture;
+  }
+}
+
+/** Thrown by `world.migration()` when two migrations claim the same `from` version (R54). */
+export class DuplicateMigrationError extends LangECSError {
+  readonly from: number;
+
+  constructor(from: number, existingTo: number, incomingTo: number) {
+    super(
+      `Two migrations start at recipeVersion ${from} (to ${existingTo} and to ${incomingTo}). ` +
+        `Migrations form a single forward chain so the upgrade path is unambiguous (R54).`,
+    );
+    this.name = 'DuplicateMigrationError';
+    this.from = from;
+  }
+}
+
+/**
+ * Thrown when a snapshot is not at the step the caller expected (R57) — the
+ * cheap, adapter-free half of resume safety.
+ */
+export class StaleSnapshotError extends LangECSError {
+  readonly found: number;
+  readonly expected: number;
+
+  constructor(found: number, expected: number) {
+    super(
+      `Snapshot is at step ${found}, but step ${expected} was expected. Another worker has almost ` +
+        `certainly advanced this world since it was read — reload the latest snapshot before resuming (R57).`,
+    );
+    this.name = 'StaleSnapshotError';
+    this.found = found;
+    this.expected = expected;
+  }
+}
+
+/**
+ * Thrown when the persistence adapter refuses a write because another world
+ * instance owns this world id at or beyond that step (R57).
+ *
+ * This is the silent-divergence guard: two workers resuming the same snapshot —
+ * a double-click, two tabs, a queue retry after a timeout — would otherwise both
+ * run happily, and one of them would be writing history nobody reads.
+ */
+export class FenceError extends LangECSError {
+  readonly worldId: string;
+  readonly step: number;
+
+  constructor(worldId: string, step: number) {
+    super(
+      `Fenced out of world "${worldId}" at step ${step}: another instance has already claimed this ` +
+        `step or a later one. This world lost the race and has stopped rather than diverge (R57). ` +
+        `Its in-memory state is now ahead of what was persisted — discard it and reload.`,
+    );
+    this.name = 'FenceError';
+    this.worldId = worldId;
+    this.step = step;
+  }
+}
+
 /** Thrown when a component's `deserialize` hook fails while loading a snapshot (R36). */
 export class DeserializeError extends LangECSError {
   readonly entity: number;

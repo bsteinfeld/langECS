@@ -1,0 +1,947 @@
+// Standard reducers (R59), typed events (R60), model middleware (R61) and
+// record/replay (R62). Zero network throughout.
+
+import { expect, test } from 'vitest';
+import {
+  appendReducer,
+  boundedAppend,
+  createWorld,
+  dedupeByReducer,
+  defineComponent,
+  defineEvent,
+  defineSystem,
+  delay,
+  formatRecording,
+  hashRequest,
+  isEventRef,
+  type Model,
+  type ModelRequest,
+  maxByReducer,
+  mergeReducer,
+  type Recording,
+  type RecordingEntry,
+  type RunEvent,
+  recordingModel,
+  replayModel,
+  requestKey,
+  scriptedModel,
+  sumReducer,
+  withCache,
+  withCost,
+  withFallback,
+  withRateLimit,
+  withRetry,
+  withTimeout,
+  wrapModel,
+} from '../src/index';
+
+// ------------------------------------------------------------------ R59
+
+test('R59 the standard reducers merge as documented, without mutating their inputs', () => {
+  const before = [1, 2];
+  expect(appendReducer<number>()(before, [3])).toEqual([1, 2, 3]);
+  // Purity matters: `current` is committed state, handed out by reference (R17).
+  expect(before).toEqual([1, 2]);
+
+  expect(mergeReducer<{ a?: number; b?: number }>()({ a: 1 }, { b: 2 })).toEqual({ a: 1, b: 2 });
+  expect(mergeReducer<{ a: number }>()({ a: 1 }, { a: 9 })).toEqual({ a: 9 });
+
+  const score = maxByReducer<{ n: number }>((v) => v.n);
+  expect(score({ n: 1 }, { n: 5 })).toEqual({ n: 5 });
+  expect(score({ n: 5 }, { n: 1 })).toEqual({ n: 5 });
+  // A tie keeps `current`, so the outcome cannot depend on barrier ordering.
+  expect(score({ n: 5 }, { n: 5 })).toEqual({ n: 5 });
+
+  const dedupe = dedupeByReducer<{ id: string }>((v) => v.id);
+  expect(dedupe([{ id: 'a' }], [{ id: 'a' }, { id: 'b' }])).toEqual([{ id: 'a' }, { id: 'b' }]);
+
+  expect(sumReducer()(3, 4)).toBe(7);
+});
+
+test('R59 boundedAppend caps growth from the chosen end', () => {
+  const last = boundedAppend<number>(3);
+  expect(last([1, 2, 3], [4])).toEqual([2, 3, 4]);
+  expect(last([], [1, 2, 3, 4, 5])).toEqual([3, 4, 5]);
+
+  const first = boundedAppend<number>(3, { keep: 'first' });
+  expect(first([1, 2, 3], [4])).toEqual([1, 2, 3]);
+
+  // A degenerate cap is now rejected at factory time rather than silently
+  // discarding everything (or, for NaN, silently becoming unbounded).
+  expect(() => boundedAppend<number>(0)).toThrow(/positive integer cap/);
+});
+
+test('R59 a bounded component stays bounded across many concurrent writes', async () => {
+  const Log = defineComponent<string[]>({ name: 'dx.Log', reducer: boundedAppend(2) });
+  const Tick = defineComponent<number>({ name: 'dx.Tick' });
+  const a = defineSystem({
+    name: 'a',
+    query: [Tick],
+    run: (e) => {
+      e.add(Log, ['a']);
+    },
+  });
+  const b = defineSystem({
+    name: 'b',
+    query: [Tick],
+    run: (e) => {
+      e.add(Log, ['b']);
+    },
+  });
+  const world = createWorld();
+  world.use(a);
+  world.use(b);
+  const entity = world.spawn(Tick(1), Log(['seed']));
+  await world.run();
+
+  // Both pairs wrote in one step and the reducer merged them (no R30 conflict),
+  // then the cap discarded the oldest.
+  expect(world.entity(entity.id)?.get(Log)).toEqual(['a', 'b']);
+});
+
+// ------------------------------------------------------------------ R60
+
+test('R60 a typed emit carries its event name; the untyped form is unchanged', async () => {
+  const Token = defineEvent<{ text: string }>('token');
+  const Phase = defineEvent<{ phase: string }>('phase');
+  const Go = defineComponent<number>({ name: 'dx.Go' });
+
+  const emitter = defineSystem({
+    name: 'emitter',
+    query: [Go],
+    run: (_e, ctx) => {
+      ctx.emit(Token, { text: 'hi' });
+      ctx.emit(Phase, { phase: 'drafting' });
+      ctx.emit({ kind: 'legacy', value: 1 });
+    },
+  });
+  const world = createWorld();
+  world.use(emitter);
+  world.spawn(Go(1));
+
+  const custom: Extract<RunEvent, { type: 'custom' }>[] = [];
+  const run = world.run();
+  for await (const event of run) {
+    if (event.type === 'custom') custom.push(event);
+  }
+
+  expect(custom.map((e) => e.name)).toEqual(['token', 'phase', undefined]);
+  expect(custom[0]?.data).toEqual({ text: 'hi' });
+  // Observers can now filter by name instead of parsing every payload.
+  expect(custom.filter((e) => e.name === 'phase').map((e) => e.data)).toEqual([
+    { phase: 'drafting' },
+  ]);
+  // The untyped form still delivers its payload verbatim, with no name.
+  expect(custom[2]?.data).toEqual({ kind: 'legacy', value: 1 });
+});
+
+test('R60 the ref check is a brand, so a payload with an eventName field is safe', async () => {
+  expect(isEventRef(defineEvent('x'))).toBe(true);
+  expect(isEventRef({ eventName: 'looks-like-one' })).toBe(false);
+
+  const Go = defineComponent<number>({ name: 'dx.Go2' });
+  const sneaky = defineSystem({
+    name: 'sneaky',
+    query: [Go],
+    run: (_e, ctx) => {
+      // A structural check would read this as a typed emit, silently swap the
+      // name and drop the payload.
+      ctx.emit({ eventName: 'not-a-ref', payload: 'kept' });
+    },
+  });
+  const world = createWorld();
+  world.use(sneaky);
+  world.spawn(Go(1));
+  const seen: unknown[] = [];
+  for await (const event of world.run()) {
+    if (event.type === 'custom') seen.push({ name: event.name, data: event.data });
+  }
+  expect(seen).toEqual([{ name: undefined, data: { eventName: 'not-a-ref', payload: 'kept' } }]);
+});
+
+// ------------------------------------------------------------------ R61
+
+/** A model that fails its first `failures` calls, then succeeds. */
+function flakyModel(failures: number, text = 'ok'): Model & { calls: () => number } {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    async generate() {
+      calls += 1;
+      if (calls <= failures) throw new Error(`provider blip ${calls}`);
+      return { message: { role: 'assistant', content: text }, finishReason: 'stop' };
+    },
+  };
+}
+
+test('R61 wrapModel composes first-listed-outermost', async () => {
+  const order: string[] = [];
+  const tag =
+    (name: string) =>
+    (inner: Model): Model => ({
+      generate: async (req) => {
+        order.push(name);
+        return inner.generate(req);
+      },
+    });
+  const model = wrapModel(scriptedModel([{ role: 'assistant', content: 'x' }]), tag('a'), tag('b'));
+  await model.generate({ messages: [] });
+  // Same convention as observer wrapSystemRun (R46).
+  expect(order).toEqual(['a', 'b']);
+});
+
+test('R61 withRetry retries a blip, gives up past max, and NEVER retries a cancellation', async () => {
+  const flaky = flakyModel(2, 'recovered');
+  const model = wrapModel(flaky, withRetry({ max: 3, baseMs: 1 }));
+  const result = await model.generate({ messages: [] });
+  expect(result.message.content).toBe('recovered');
+  expect(flaky.calls()).toBe(3);
+
+  const hopeless = flakyModel(10);
+  await expect(
+    wrapModel(hopeless, withRetry({ max: 2, baseMs: 1 })).generate({ messages: [] }),
+  ).rejects.toThrow(/provider blip/);
+  expect(hopeless.calls()).toBe(3); // first attempt + 2 retries
+
+  // Retrying an aborted call would defeat world.cancel() and every timeoutMs
+  // budget above it.
+  const controller = new AbortController();
+  let attempts = 0;
+  const aborting: Model = {
+    generate: async () => {
+      attempts += 1;
+      controller.abort();
+      throw new Error('aborted mid-call');
+    },
+  };
+  await expect(
+    wrapModel(aborting, withRetry({ max: 5, baseMs: 1 })).generate({
+      messages: [],
+      signal: controller.signal,
+    }),
+  ).rejects.toThrow();
+  expect(attempts).toBe(1);
+});
+
+test('R61 withRetry retries a stream only before the first chunk', async () => {
+  // Fails after emitting: retrying would replay tokens the consumer already saw.
+  let calls = 0;
+  const halfStreamed: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: '' } }),
+    stream: async (_req, onChunk) => {
+      calls += 1;
+      onChunk({ text: 'par' });
+      throw new Error('died mid-stream');
+    },
+  };
+  const chunks: string[] = [];
+  await expect(
+    wrapModel(halfStreamed, withRetry({ max: 3, baseMs: 1 })).stream?.({ messages: [] }, (d) => {
+      if (d.text !== undefined) chunks.push(d.text);
+    }),
+  ).rejects.toThrow(/died mid-stream/);
+  expect(calls).toBe(1);
+  expect(chunks).toEqual(['par']);
+
+  // Fails before emitting: safe to retry, and the consumer sees one clean stream.
+  let tries = 0;
+  const failsEarly: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: '' } }),
+    stream: async (_req, onChunk) => {
+      tries += 1;
+      if (tries === 1) throw new Error('connection reset');
+      onChunk({ text: 'clean' });
+      return { message: { role: 'assistant', content: 'clean' } };
+    },
+  };
+  const good: string[] = [];
+  const result = await wrapModel(failsEarly, withRetry({ max: 3, baseMs: 1 })).stream?.(
+    { messages: [] },
+    (d) => {
+      if (d.text !== undefined) good.push(d.text);
+    },
+  );
+  expect(result?.message.content).toBe('clean');
+  expect(good).toEqual(['clean']);
+});
+
+test('R61 withTimeout aborts the inner call rather than merely un-awaiting it', async () => {
+  let innerSawAbort = false;
+  const slow: Model = {
+    generate: async (req) => {
+      await delay(60_000, req.signal).catch((err) => {
+        innerSawAbort = req.signal?.aborted === true;
+        throw err;
+      });
+      return { message: { role: 'assistant', content: 'never' } };
+    },
+  };
+  await expect(wrapModel(slow, withTimeout(10)).generate({ messages: [] })).rejects.toThrow(
+    /exceeded its 10ms timeout/,
+  );
+  expect(innerSawAbort).toBe(true);
+});
+
+test('R61 withTimeout still propagates the caller cancellation', async () => {
+  const slow: Model = {
+    generate: async (req) => {
+      await delay(60_000, req.signal);
+      return { message: { role: 'assistant', content: 'never' } };
+    },
+  };
+  const controller = new AbortController();
+  const pending = wrapModel(slow, withTimeout(60_000)).generate({
+    messages: [],
+    signal: controller.signal,
+  });
+  controller.abort(new Error('user stopped'));
+  await expect(pending).rejects.toThrow('user stopped');
+});
+
+test('R61 withFallback switches models on failure but never mid-answer', async () => {
+  const primary = flakyModel(10);
+  const backup = scriptedModel([{ role: 'assistant', content: 'from the backup' }]);
+  const result = await wrapModel(primary, withFallback(backup)).generate({ messages: [] });
+  expect(result.message.content).toBe('from the backup');
+
+  // Half-streamed: splicing a second model's answer onto the first would produce
+  // a reply that neither model actually gave.
+  const halfStreamed: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: '' } }),
+    stream: async (_req, onChunk) => {
+      onChunk({ text: 'half ' });
+      throw new Error('died mid-stream');
+    },
+  };
+  const chunks: string[] = [];
+  await expect(
+    wrapModel(halfStreamed, withFallback(backup)).stream?.({ messages: [] }, (d) => {
+      if (d.text !== undefined) chunks.push(d.text);
+    }),
+  ).rejects.toThrow(/died mid-stream/);
+  expect(chunks).toEqual(['half ']);
+});
+
+test('R61 a layer after withFallback sees only the primary — the ordering trap', async () => {
+  const backup: Model = {
+    generate: async () => ({
+      message: { role: 'assistant', content: 'from the backup' },
+      usage: { inputTokens: 5, outputTokens: 5 },
+    }),
+  };
+  // Verified against a real failing provider: this is the order everyone writes
+  // first (it is the order in the original proposal), and the ledger stays empty
+  // in exactly the case you most want to measure.
+  const inside: number[] = [];
+  const wrong = wrapModel(
+    flakyModel(10),
+    withFallback(backup),
+    withCost((r) => inside.push(r.ms)),
+  );
+  expect((await wrong.generate({ messages: [] })).message.content).toBe('from the backup');
+  expect(inside).toEqual([]);
+
+  // Observability outermost sees whichever model actually answered.
+  const outside: number[] = [];
+  const right = wrapModel(
+    flakyModel(10),
+    withCost((r) => outside.push(r.ms)),
+    withFallback(backup),
+  );
+  expect((await right.generate({ messages: [] })).message.content).toBe('from the backup');
+  expect(outside).toHaveLength(1);
+});
+
+test('R61 withCost reports usage for successful calls only', async () => {
+  const reports: { total: number; ms: number }[] = [];
+  const usable: Model = {
+    generate: async () => ({
+      message: { role: 'assistant', content: 'hi' },
+      usage: { inputTokens: 10, outputTokens: 4 },
+      finishReason: 'stop',
+    }),
+  };
+  const model = wrapModel(
+    usable,
+    withCost((r) => {
+      reports.push({ total: (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0), ms: r.ms });
+    }),
+  );
+  await model.generate({ messages: [] });
+  await model.generate({ messages: [] });
+  expect(reports.map((r) => r.total)).toEqual([14, 14]);
+  expect(reports[0]?.ms).toBeGreaterThanOrEqual(0);
+
+  // A failure has no usage to report.
+  const failing = wrapModel(
+    flakyModel(10),
+    withCost(() => reports.push({ total: -1, ms: 0 })),
+  );
+  await expect(failing.generate({ messages: [] })).rejects.toThrow();
+  expect(reports).toHaveLength(2);
+});
+
+test('R61 withCache serves identical requests and ignores the signal in the key', async () => {
+  let calls = 0;
+  const counting: Model = {
+    generate: async () => {
+      calls += 1;
+      return { message: { role: 'assistant', content: `call ${calls}` } };
+    },
+  };
+  const model = wrapModel(counting, withCache());
+  const req: ModelRequest = { messages: [{ role: 'user', content: 'same' }] };
+
+  expect((await model.generate(req)).message.content).toBe('call 1');
+  expect((await model.generate(req)).message.content).toBe('call 1');
+  // A different signal is the same question — keying on it would make every call
+  // unique and the cache pointless.
+  const controller = new AbortController();
+  expect((await model.generate({ ...req, signal: controller.signal })).message.content).toBe(
+    'call 1',
+  );
+  expect(calls).toBe(1);
+
+  // Property order must not matter either.
+  const reordered: ModelRequest = { system: 'x', messages: req.messages };
+  const withSystem: ModelRequest = { messages: req.messages, system: 'x' };
+  expect(hashRequest(reordered)).toBe(hashRequest(withSystem));
+
+  // A different request is a different key.
+  expect(
+    (await model.generate({ messages: [{ role: 'user', content: 'other' }] })).message.content,
+  ).toBe('call 2');
+});
+
+test('R61 withCache expires entries after ttlMs and never caches a failure', async () => {
+  // Real timers with a tiny TTL: the cache clock is `performance.now()`, which
+  // vitest's fake timers do not advance.
+  let calls = 0;
+  const counting: Model = {
+    generate: async () => {
+      calls += 1;
+      return { message: { role: 'assistant', content: `call ${calls}` } };
+    },
+  };
+  const model = wrapModel(counting, withCache({ ttlMs: 10 }));
+  await model.generate({ messages: [] });
+  await model.generate({ messages: [] });
+  expect(calls).toBe(1);
+  await delay(25);
+  await model.generate({ messages: [] });
+  expect(calls).toBe(2);
+
+  // Caching an error would turn one blip into a permanently poisoned answer.
+  const flaky = flakyModel(1, 'eventually');
+  const cached = wrapModel(flaky, withCache());
+  await expect(cached.generate({ messages: [] })).rejects.toThrow();
+  expect((await cached.generate({ messages: [] })).message.content).toBe('eventually');
+});
+
+test('R61 withRateLimit caps concurrency and spaces out calls', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const tracked: Model = {
+    generate: async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await delay(5);
+      inFlight -= 1;
+      return { message: { role: 'assistant', content: 'ok' } };
+    },
+  };
+  const model = wrapModel(tracked, withRateLimit({ concurrency: 2 }));
+  await Promise.all(Array.from({ length: 6 }, () => model.generate({ messages: [] })));
+  expect(peak).toBeLessThanOrEqual(2);
+
+  const spaced = wrapModel(
+    { generate: async () => ({ message: { role: 'assistant' as const, content: 'ok' } }) },
+    withRateLimit({ minIntervalMs: 20 }),
+  );
+  const started = Date.now();
+  await spaced.generate({ messages: [] });
+  await spaced.generate({ messages: [] });
+  expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+});
+
+test('R61 withRateLimit: an aborted queued call never strands the calls behind it', async () => {
+  // Regression: the post-wake abort check used to sit OUTSIDE the try/finally, so
+  // a waiter that aborted after being handed a slot swallowed the baton and every
+  // remaining queued call hung forever.
+  const completed: string[] = [];
+  const slow: Model = {
+    generate: async (req) => {
+      await delay(15, req.signal);
+      return { message: { role: 'assistant', content: 'done' } };
+    },
+  };
+  const model = wrapModel(slow, withRateLimit({ concurrency: 1 }));
+
+  const cancelSecond = new AbortController();
+  const first = model.generate({ messages: [] }).then(() => completed.push('first'));
+  // Both of these queue behind `first`.
+  const second = model.generate({ messages: [], signal: cancelSecond.signal }).then(
+    () => completed.push('second'),
+    () => completed.push('second:aborted'),
+  );
+  const third = model.generate({ messages: [] }).then(() => completed.push('third'));
+
+  cancelSecond.abort();
+  await Promise.all([first, second, third]);
+
+  // The third call is the point: it must still get its turn.
+  expect(completed).toContain('third');
+  expect(completed).toContain('first');
+  expect(completed).toContain('second:aborted');
+
+  // The gate is not wedged — a later call still goes through.
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'done' },
+  });
+});
+
+test('R61 withRateLimit releases the slot when the call itself throws', async () => {
+  const model = wrapModel(flakyModel(1, 'recovered'), withRateLimit({ concurrency: 1 }));
+  await expect(model.generate({ messages: [] })).rejects.toThrow(/provider blip/);
+  // A thrown call must hand its slot back, or capacity leaks one per failure.
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'recovered' },
+  });
+});
+
+test('R61 middleware that only wraps generate keeps the model streamable', async () => {
+  const streaming = scriptedModel([{ role: 'assistant', content: 'streamed' }]);
+  // withCost/withRetry etc. must not silently strip `stream` — stdlib's callLLM
+  // branches on its presence, so tokens would just stop appearing.
+  const wrapped = wrapModel(
+    streaming,
+    withCost(() => {}),
+    withRetry({ max: 1, baseMs: 1 }),
+  );
+  expect(typeof wrapped.stream).toBe('function');
+  const chunks: string[] = [];
+  const result = await wrapped.stream?.({ messages: [] }, (d) => {
+    if (d.text !== undefined) chunks.push(d.text);
+  });
+  expect(result?.message.content).toBe('streamed');
+  expect(chunks.join('')).toBe('streamed');
+
+  // …and a non-streaming model stays non-streaming.
+  const plain = wrapModel(
+    { generate: async () => ({ message: { role: 'assistant' as const, content: 'x' } }) },
+    withCost(() => {}),
+  );
+  expect(plain.stream).toBeUndefined();
+});
+
+// ------------------------------------------------------------------ R62
+
+test('R62 a recorded run replays exactly, matching on request hash', async () => {
+  const live = scriptedModel([
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'search', args: { q: 'x' } }] },
+    { role: 'assistant', content: 'the answer' },
+  ]);
+  const recorder = recordingModel(live);
+
+  const first: ModelRequest = { messages: [{ role: 'user', content: 'question' }] };
+  const second: ModelRequest = {
+    messages: [
+      { role: 'user', content: 'question' },
+      { role: 'tool', content: 'result', toolCallId: 'c1' },
+    ],
+  };
+  await recorder.generate(first);
+  await recorder.generate(second);
+
+  const recording = recorder.recording();
+  expect(recording.entries).toHaveLength(2);
+  // A recording is plain JSON, so it is a checkable fixture.
+  expect(JSON.parse(JSON.stringify(recording))).toEqual(recording);
+
+  // Replay out of order: hash matching means call order may differ (R29).
+  const replay = replayModel(recording, { strict: true });
+  expect((await replay.generate(second)).message.content).toBe('the answer');
+  expect((await replay.generate(first)).message.toolCalls?.[0]?.name).toBe('search');
+});
+
+test('R62 a prompt edit falls back to ordinal matching, and strict mode refuses', async () => {
+  const recorder = recordingModel(
+    scriptedModel([
+      { role: 'assistant', content: 'first' },
+      { role: 'assistant', content: 'second' },
+    ]),
+  );
+  await recorder.generate({ messages: [{ role: 'user', content: 'v1 prompt' }] });
+  await recorder.generate({ messages: [{ role: 'user', content: 'v1 prompt again' }] });
+  const recording = recorder.recording();
+
+  // The prompt has been edited, so nothing hash-matches. This is the case a
+  // pure content-addressed replay cannot serve at all.
+  const edited = { messages: [{ role: 'user' as const, content: 'v2 prompt' }] };
+  const mismatches: { index: number }[] = [];
+  const lenient = replayModel(recording, { onMismatch: (i) => mismatches.push(i) });
+  expect((await lenient.generate(edited)).message.content).toBe('first');
+  expect((await lenient.generate(edited)).message.content).toBe('second');
+  expect(mismatches.map((m) => m.index)).toEqual([0, 1]);
+
+  // In CI you want to hear about the drift instead.
+  const strict = replayModel(recording, { strict: true });
+  await expect(strict.generate(edited)).rejects.toThrow(/prompts have drifted from this fixture/);
+});
+
+test('R62 replay is exhaustible, entries are consumed once, and results are detached', async () => {
+  const recorder = recordingModel(scriptedModel([{ role: 'assistant', content: 'only' }]));
+  const req = { messages: [{ role: 'user' as const, content: 'q' }] };
+  await recorder.generate(req);
+  const recording = recorder.recording();
+
+  const replay = replayModel(recording);
+  const result = await replay.generate(req);
+  expect(result.message.content).toBe('only');
+  // Mutating a replayed message must not corrupt the fixture for the next replay.
+  result.message.content = 'tampered';
+  expect(recording.entries[0]?.result.message.content).toBe('only');
+  // One recorded call answers exactly one call.
+  await expect(replay.generate(req)).rejects.toThrow(/exhausted/);
+});
+
+test('R62 a recorded stream replays re-chunked, and the sink sees progress', async () => {
+  const captured: RecordingEntry[] = [];
+  const recorder = recordingModel(
+    scriptedModel([{ role: 'assistant', content: 'streamed answer' }]),
+    (entry) => captured.push(entry),
+  );
+  const req = { messages: [{ role: 'user' as const, content: 'q' }] };
+  const live: string[] = [];
+  await recorder.stream?.(req, (d) => {
+    if (d.text !== undefined) live.push(d.text);
+  });
+  // The sink fires per captured ENTRY, so a crashed run still leaves a fixture
+  // without re-serialising everything captured so far on every call.
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.via).toBe('stream');
+
+  const replayed: string[] = [];
+  const result = await replayModel(recorder.recording()).stream?.(req, (d) => {
+    if (d.text !== undefined) replayed.push(d.text);
+  });
+  expect(result?.message.content).toBe('streamed answer');
+  // Chunk boundaries are a network artefact, so replay re-chunks rather than
+  // pretending to preserve them.
+  expect(replayed.join('')).toBe('streamed answer');
+  expect(replayed.length).toBeGreaterThan(1);
+});
+
+test('R62 recordings drop provider `raw` so the fixture stays JSON, and format readably', async () => {
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  const withRaw: Model = {
+    generate: async () => ({
+      message: { role: 'assistant', content: 'hi' },
+      usage: { inputTokens: 1, outputTokens: 2 },
+      finishReason: 'stop',
+      raw: circular, // a provider response, often circular
+    }),
+  };
+  const recorder = recordingModel(withRaw);
+  await recorder.generate({ messages: [{ role: 'user', content: 'q' }] });
+  const recording = recorder.recording();
+
+  expect(recording.entries[0]?.result.raw).toBeUndefined();
+  expect(recording.entries[0]?.result.usage).toEqual({ inputTokens: 1, outputTokens: 2 });
+  expect(() => JSON.stringify(recording)).not.toThrow();
+
+  const text = formatRecording(recording);
+  expect(text).toContain('recording v1: 1 call(s)');
+  expect(text).toContain('← user: q');
+  expect(text).toContain('→ assistant: hi');
+});
+
+test('R62 replay drives a real world, so a recorded run becomes a regression test', async () => {
+  const Question = defineComponent<string>({ name: 'dx.Question' });
+  const Answer = defineComponent<string>({ name: 'dx.Answer' });
+  const ask = defineSystem({
+    name: 'ask',
+    query: [Question],
+    run: async (e, ctx) => {
+      const model = ctx.resource<Model>('model');
+      const res = await model.generate({ messages: [{ role: 'user', content: e.get(Question) }] });
+      e.set(Answer, res.message.content);
+    },
+  });
+
+  const build = (model: Model) => {
+    const world = createWorld();
+    world.use(ask);
+    world.register('model', model);
+    return { world, entity: world.spawn(Question('why?')) };
+  };
+
+  // Record against a "live" model…
+  const recorder = recordingModel(scriptedModel([{ role: 'assistant', content: 'because' }]));
+  const live = build(recorder);
+  await live.world.run();
+  expect(live.world.entity(live.entity.id)?.get(Answer)).toBe('because');
+
+  // …then replay it with no model at all. Because state is data and scheduling is
+  // deterministic, the recorded run really does replay.
+  const replayed = build(replayModel(recorder.recording(), { strict: true }));
+  await replayed.world.run();
+  expect(replayed.world.entity(replayed.entity.id)?.get(Answer)).toBe('because');
+  expect(replayed.world.getTrace().map((s) => s.runs.map((r) => r.system))).toEqual(
+    live.world.getTrace().map((s) => s.runs.map((r) => r.system)),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from the adversarial review of PR #4. Each failed against the
+// code as first merged; none was caught by the existing suite.
+// ---------------------------------------------------------------------------
+
+test('R62 a hash match never strands an earlier entry for the ordinal fallback', async () => {
+  const recorder = recordingModel(
+    scriptedModel([
+      { role: 'assistant', content: 'ans-for-turn-A' },
+      { role: 'assistant', content: 'ans-for-turn-B' },
+    ]),
+  );
+  const reqFor = (text: string): ModelRequest => ({ messages: [{ role: 'user', content: text }] });
+  await recorder.generate(reqFor('turn-A'));
+  await recorder.generate(reqFor('turn-B'));
+  const recording = recorder.recording();
+
+  // The commonest prompt refactor there is: a leading turn is deleted, so call 1
+  // now sends what call 2 used to send. Scanning the whole array let call 1
+  // consume entry 2 by hash, after which the ordinal fallback handed call 2 the
+  // FIRST answer — the answers were silently swapped, and `onMismatch` never
+  // fired for call 1, so `strict` could not catch it either.
+  const out: string[] = [];
+  const reorders: { position: number; expectedPosition: number }[] = [];
+  const mismatches: number[] = [];
+  const replay = replayModel(recording, {
+    onOutOfOrder: (i) =>
+      reorders.push({ position: i.position, expectedPosition: i.expectedPosition }),
+    onMismatch: (i) => mismatches.push(i.index),
+  });
+  out.push((await replay.generate(reqFor('turn-B'))).message.content);
+  out.push((await replay.generate(reqFor('turn-C'))).message.content);
+
+  // The real defect was SILENCE on call 1: a hash match reached past entry 0,
+  // consumed entry 1, and reported nothing — so `strict` could not catch it and
+  // the ordinal fallback then handed call 2 the earlier answer. The fix is that
+  // an out-of-order resolution is always reported.
+  expect(reorders).toEqual([{ position: 1, expectedPosition: 0 }]);
+  expect(mismatches).toEqual([0]);
+  // And strict mode now refuses rather than swapping quietly.
+  const strict = replayModel(recording, { strict: true });
+  await strict.generate(reqFor('turn-B'));
+  await expect(strict.generate(reqFor('turn-C'))).rejects.toThrow(/drifted from this fixture/);
+  expect(out).toHaveLength(2);
+});
+
+test('R62 consumption is keyed on position, so a merged fixture stays fully reachable', async () => {
+  const one = recordingModel(scriptedModel([{ role: 'assistant', content: 'ans-A' }]));
+  const two = recordingModel(scriptedModel([{ role: 'assistant', content: 'ans-B' }]));
+  const reqA: ModelRequest = { messages: [{ role: 'user', content: 'a' }] };
+  const reqB: ModelRequest = { messages: [{ role: 'user', content: 'b' }] };
+  await one.generate(reqA);
+  await two.generate(reqB);
+
+  // Concatenating two recordings — which the per-entry sink invites — gives two
+  // entries both carrying index 0. Keying `consumed` on `entry.index` marked both
+  // at once, so half the fixture was unreachable behind an error blaming the
+  // recording.
+  const merged: Recording = {
+    version: 1,
+    entries: [...one.recording().entries, ...two.recording().entries],
+  };
+  const replay = replayModel(merged);
+  expect((await replay.generate(reqA)).message.content).toBe('ans-A');
+  expect((await replay.generate(reqB)).message.content).toBe('ans-B');
+});
+
+test('R62 replayModel only streams when the fixture actually recorded a stream', async () => {
+  const generateOnly: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: 'no streaming here' } }),
+  };
+  const recorder = recordingModel(generateOnly);
+  expect(recorder.stream).toBeUndefined();
+  await recorder.generate({ messages: [] });
+
+  // `via` was recorded faithfully and then ignored, so a test asserting "this
+  // model emits no token events" passed live and failed open against the fixture.
+  expect(replayModel(recorder.recording()).stream).toBeUndefined();
+});
+
+test('R61 withFallback does not fabricate a stream on a non-streaming primary', async () => {
+  const primary: Model = {
+    generate: async () => ({ message: { role: 'assistant', content: 'primary' } }),
+  };
+  const backup = scriptedModel([{ role: 'assistant', content: 'backup' }]);
+  // stdlib's callLLM branches on `stream`'s presence, so a fabricated one that
+  // emitted zero chunks made every token printer go silently blank.
+  expect(wrapModel(primary, withFallback(backup)).stream).toBeUndefined();
+
+  // A non-streaming FALLBACK behind a streaming primary still delivers its text.
+  const failing: Model = {
+    generate: async () => {
+      throw new Error('down');
+    },
+    stream: async () => {
+      throw new Error('down');
+    },
+  };
+  const chunks: string[] = [];
+  const result = await wrapModel(failing, withFallback(primary)).stream?.({ messages: [] }, (d) => {
+    if (d.text !== undefined) chunks.push(d.text);
+  });
+  expect(result?.message.content).toBe('primary');
+  expect(chunks.join('')).toBe('primary');
+});
+
+test('R61 withTimeout outside withFallback bounds the whole chain, not each attempt', async () => {
+  const hang: Model = {
+    generate: async (req) => {
+      await delay(60_000, req.signal);
+      return { message: { role: 'assistant', content: 'never' } };
+    },
+  };
+  const quick = scriptedModel([{ role: 'assistant', content: 'from the backup' }]);
+  // The intuitive reading — "give the primary 20ms, then try the small one" —
+  // does NOT hold, and cannot: the deadline aborts the signal the whole chain
+  // shares, so there is no budget left to spend on a fallback. It fails, and the
+  // error names the deadline rather than masquerading as an operator cancel.
+  await expect(
+    wrapModel(hang, withTimeout(20), withFallback(quick)).generate({ messages: [] }),
+  ).rejects.toThrow(/exceeded its 20ms timeout/);
+
+  // The construction that DOES give each attempt its own budget puts the timeout
+  // per model, inside the fallback.
+  const perAttempt = await wrapModel(
+    wrapModel(hang, withTimeout(20)),
+    withFallback(quick),
+  ).generate({ messages: [] });
+  expect(perAttempt.message.content).toBe('from the backup');
+
+  // An operator cancel still must NOT fail over.
+  const controller = new AbortController();
+  const pending = wrapModel(hang, withFallback(quick)).generate({
+    messages: [],
+    signal: controller.signal,
+  });
+  controller.abort(new Error('user stopped'));
+  await expect(pending).rejects.toThrow('user stopped');
+});
+
+test('R61 withRateLimit spaces CONCURRENT calls, and never stalls the first one', async () => {
+  const starts: number[] = [];
+  const base: Model = {
+    generate: async () => {
+      starts.push(Date.now());
+      return { message: { role: 'assistant', content: 'ok' } };
+    },
+  };
+  // A large interval must not delay the very first call: `now()` is
+  // performance.now(), so a zero baseline made call one sleep `interval - uptime`.
+  const first = wrapModel(base, withRateLimit({ minIntervalMs: 3_000 }));
+  const t0 = Date.now();
+  await first.generate({ messages: [] });
+  expect(Date.now() - t0).toBeLessThan(500);
+
+  // Every concurrent caller read `lastStart` before any wrote it, so they all
+  // computed the same deadline and fired together — with the default unlimited
+  // concurrency a fan-out step got no pacing at all.
+  starts.length = 0;
+  const spaced = wrapModel(base, withRateLimit({ minIntervalMs: 25 }));
+  await Promise.all(Array.from({ length: 4 }, () => spaced.generate({ messages: [] })));
+  const offsets = starts.map((t) => t - (starts[0] ?? 0)).sort((a, b) => a - b);
+  expect(offsets[3]).toBeGreaterThanOrEqual(60);
+});
+
+test('R61 withCache hands out detached results, so a consumer cannot poison it', async () => {
+  let calls = 0;
+  const base: Model = {
+    generate: async () => {
+      calls += 1;
+      return { message: { role: 'assistant', content: 'pristine' } };
+    },
+  };
+  const model = wrapModel(base, withCache());
+  const req: ModelRequest = { messages: [{ role: 'user', content: 'q' }] };
+
+  const first = await model.generate(req);
+  // stdlib does `e.add(Messages, [result.message])`, so a shared object becomes
+  // committed component state aliased by every entity that got this answer.
+  first.message.content = 'MUTATED BY A CONSUMER';
+  expect((await model.generate(req)).message.content).toBe('pristine');
+  expect(calls).toBe(1);
+});
+
+test('R61 a throwing withCost sink does not fail a successful call', async () => {
+  const base: Model = {
+    generate: async () => ({
+      message: { role: 'assistant', content: 'ok' },
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }),
+  };
+  // A ledger that throws on overflow is plausible under R63, and would otherwise
+  // turn billing bookkeeping into SystemError on entities that did nothing wrong.
+  const model = wrapModel(
+    base,
+    withCost(() => {
+      throw new Error('ledger over budget');
+    }),
+  );
+  await expect(model.generate({ messages: [] })).resolves.toMatchObject({
+    message: { content: 'ok' },
+  });
+});
+
+test('R59 boundedAppend rejects a cap that would silently unbound or empty it', () => {
+  // NaN made `merged.length <= NaN` false and the slice return everything, so the
+  // one reducer whose purpose is bounding growth became unbounded.
+  expect(() => boundedAppend<number>(Number.NaN)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(0)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(-3)).toThrow(/positive integer cap/);
+  expect(() => boundedAppend<number>(2.5)).toThrow(/positive integer cap/);
+  expect(boundedAppend<number>(2)([1], [2, 3])).toEqual([2, 3]);
+});
+
+test('R61/R62 hashing survives a cyclic or very deep request', async () => {
+  const cyclic: Record<string, unknown> = { type: 'object' };
+  cyclic.self = cyclic;
+  const req: ModelRequest = { messages: [], tools: [{ name: 't', parameters: cyclic }] };
+  // `tools[].parameters` is a user-supplied JSON Schema, so a $ref-style
+  // back-reference is ordinary. Unbounded recursion made every cache lookup throw
+  // a RangeError — and turned a model call that had SUCCEEDED into a failure when
+  // recordingModel hashed it on the success path.
+  expect(() => hashRequest(req)).not.toThrow();
+
+  let deep: Record<string, unknown> = {};
+  const root = deep;
+  for (let i = 0; i < 5_000; i++) {
+    const next: Record<string, unknown> = {};
+    deep.next = next;
+    deep = next;
+  }
+  expect(() =>
+    hashRequest({ messages: [], tools: [{ name: 'd', parameters: root }] }),
+  ).not.toThrow();
+
+  // And a recording still returns the model's result even when hashing struggles.
+  const recorder = recordingModel(scriptedModel([{ role: 'assistant', content: 'survived' }]));
+  await expect(recorder.generate(req)).resolves.toMatchObject({
+    message: { content: 'survived' },
+  });
+});
+
+test('R61 canonical keys distinguish non-finite numbers from null', () => {
+  const base = { messages: [] as never[] };
+  const nan = requestKey({ ...base, temperature: Number.NaN });
+  const inf = requestKey({ ...base, temperature: Number.POSITIVE_INFINITY });
+  const unset = requestKey(base);
+  // `maxTokens: budget / 0` shared a cache entry with an unset field.
+  expect(new Set([nan, inf, unset]).size).toBe(3);
+  // -0 and 0 SHOULD collapse: no provider distinguishes them.
+  expect(requestKey({ ...base, temperature: -0 })).toBe(requestKey({ ...base, temperature: 0 }));
+});

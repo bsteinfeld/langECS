@@ -33,11 +33,15 @@ export {
   CancelledError,
   DeserializeError,
   DuplicateComponentError,
+  DuplicateMigrationError,
   DuplicateSystemError,
+  FenceError,
   LangECSError,
   MissingResourceError,
+  RecipeVersionError,
   type SerializedError,
   SnapshotVersionError,
+  StaleSnapshotError,
   SystemTimeoutError,
   UnknownComponentError,
   UnknownEntityError,
@@ -45,6 +49,14 @@ export {
   WorldRunningError,
   WriteConflictError,
 } from './errors';
+// Typed resource references (R18 amended): replace stringly-typed hops like
+// `ctx.resource<Model>('model:main')` with
+// `const MainModel = defineResource<Model>('model:main')` + `ctx.resource(MainModel)`.
+export {
+  defineEvent,
+  type EventRef,
+  isEventRef,
+} from './event';
 export type {
   ChangeRecord,
   PairRef,
@@ -53,6 +65,23 @@ export type {
   RunResult,
   RunStatus,
 } from './events';
+export { hashRequest, requestKey } from './hash';
+// Model middleware (R61): retry/timeout/fallback/rate-limit/cost/cache, composed
+// at the resource-registration site and entirely outside engine semantics.
+export {
+  type CacheOptions,
+  type ModelMiddleware,
+  type RateLimitOptions,
+  type RetryOptions,
+  type UsageReport,
+  withCache,
+  withCost,
+  withFallback,
+  withRateLimit,
+  withRetry,
+  withTimeout,
+  wrapModel,
+} from './middleware';
 export {
   type Model,
   type ModelRequest,
@@ -76,11 +105,35 @@ export type {
   WorldObserver,
 } from './observe';
 export { MemoryAdapter, type PersistenceAdapter } from './persistence';
-// Typed resource references (R18 amended): replace stringly-typed hops like
-// `ctx.resource<Model>('model:main')` with
-// `const MainModel = defineResource<Model>('model:main')` + `ctx.resource(MainModel)`.
+// Record/replay (R62): turn a real run into a deterministic fixture.
+export {
+  formatRecording,
+  type Recording,
+  type RecordingEntry,
+  type RecordingModel,
+  type ReplayOptions,
+  recordingModel,
+  replayModel,
+} from './recording';
+// Standard reducers (R59) — the merge functions every fan-in needs.
+export {
+  appendReducer,
+  boundedAppend,
+  dedupeByReducer,
+  maxByReducer,
+  mergeReducer,
+  type Reducer,
+  sumReducer,
+} from './reducers';
 export { defineResource, type ResourceRef } from './resource';
-export type { PendingPair, Snapshot, SnapshotEntity } from './snapshot';
+export type {
+  LoadCheck,
+  LoadReport,
+  Migration,
+  PendingPair,
+  Snapshot,
+  SnapshotEntity,
+} from './snapshot';
 export {
   type ComponentValue,
   defineSystem,

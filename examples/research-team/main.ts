@@ -11,6 +11,7 @@
 import { openai } from '@ai-sdk/openai';
 import { fromAiSdk } from '@langecs/ai-sdk';
 import { createWorld, formatTrace } from '@langecs/core';
+import { narrateWorld } from '@langecs/stdlib';
 import { loadEnvLocal } from '../_shared/env';
 import {
   Answer,
@@ -20,8 +21,8 @@ import {
   Plan,
   Question,
   ResearchModel,
+  spentTokens,
   TokenUsage,
-  totalTokens,
 } from './blackboard';
 import { spawnResearchTeam } from './team';
 
@@ -67,6 +68,12 @@ if (exceeded !== undefined) {
     `\nbudget exceeded: ~${exceeded.spent} of ${exceeded.budget} tokens — partial results above`,
   );
 }
-console.log(`tokens spent: ~${totalTokens(board.get(TokenUsage) ?? [])}`);
+console.log(`tokens spent: ~${spentTokens(board.get(TokenUsage) ?? [])}`);
 
 if (process.argv.includes('--trace')) console.log(`\n${formatTrace(world.getTrace())}`);
+
+// What the world would say it is doing — `Phase`/`Goal` are components with no
+// scheduling role (R64), so this costs the engine nothing and is readable at any
+// moment, including mid-run from another process via the snapshot.
+console.log('\n--- what the team is doing ---');
+for (const line of narrateWorld(world)) console.log(`  ${line.sentence}`);
