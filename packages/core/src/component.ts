@@ -71,13 +71,40 @@ export function isComponentType(term: QueryTerm): term is ComponentType<any> {
 
 // Global registry: component name -> definition, so snapshots rehydrate by name
 // and reducers/serializers re-attach (R7).
-const registry = new Map<string, ComponentType<any>>();
+//
+// The registry lives on `globalThis`, keyed by `Symbol.for`, because Node's dual-format
+// interop can instantiate this module twice in one process (an ESM `import` and a CJS
+// `require` of the same package are separate module instances). With a module-local map,
+// components registered through one instance are invisible to `world.load` running in the
+// other, and a snapshot rejects names that are genuinely defined (R36 misfires). One
+// process, one registry — whichever instance loads first owns the canonical entries, and
+// a later instance re-defining the same name receives the canonical object back so
+// component identity stays unique process-wide. Within a single instance, a duplicate
+// name still throws (R4, R7); the entry's `owner` is how the two cases are told apart.
+interface RegistryEntry {
+  type: ComponentType<any>;
+  owner: symbol;
+}
+const REGISTRY_KEY = Symbol.for('langecs.componentRegistry');
+const TAGS_KEY = Symbol.for('langecs.componentTags');
+const globalSlots = globalThis as unknown as Record<symbol, unknown>;
+function globalSlot<V>(key: symbol, create: () => V): V {
+  if (globalSlots[key] === undefined) globalSlots[key] = create();
+  return globalSlots[key] as V;
+}
+const registry = globalSlot(REGISTRY_KEY, () => new Map<string, RegistryEntry>());
 // Tags are plain `ComponentType<true>`s at runtime; tracked separately so
 // `listComponents()` can report them (R47) without widening the public shape.
-const tags = new WeakSet<ComponentType<any>>();
+const tags = globalSlot(TAGS_KEY, () => new WeakSet<ComponentType<any>>());
+/** Unique per module instance — distinguishes a true duplicate from interop re-registration. */
+const MODULE_INSTANCE = Symbol('langecs.moduleInstance');
 
 function makeComponent<T>(opts: ComponentOptions<T>, zeroArgDefault?: T): ComponentType<T> {
-  if (registry.has(opts.name)) throw new DuplicateComponentError(opts.name);
+  const existing = registry.get(opts.name);
+  if (existing) {
+    if (existing.owner === MODULE_INSTANCE) throw new DuplicateComponentError(opts.name);
+    return existing.type as ComponentType<T>;
+  }
   const callable = (value: T): ComponentInit<T> => ({
     component: type,
     value: value === undefined && zeroArgDefault !== undefined ? zeroArgDefault : value,
@@ -91,7 +118,7 @@ function makeComponent<T>(opts: ComponentOptions<T>, zeroArgDefault?: T): Compon
   }) as unknown as ComponentType<T>;
   // Make the function's own `name` match for debugging/DX.
   Object.defineProperty(type, 'name', { value: opts.name, configurable: true });
-  registry.set(opts.name, type);
+  registry.set(opts.name, { type, owner: MODULE_INSTANCE });
   return type;
 }
 
@@ -131,7 +158,7 @@ export function defineTag<const N extends string>(name: N): TagType<N> {
  * Returns `undefined` when no component with that name has been defined.
  */
 export function getComponentByName(name: string): ComponentType<any> | undefined {
-  return registry.get(name);
+  return registry.get(name)?.type;
 }
 
 /** One registry entry, as reported by `listComponents()` (R47). */
@@ -152,7 +179,7 @@ export interface ComponentInfo {
  */
 export function listComponents(): ComponentInfo[] {
   return [...registry.values()]
-    .map((c) => ({
+    .map(({ type: c }) => ({
       name: c.componentName,
       tag: tags.has(c),
       reducer: c.reducer !== undefined,
