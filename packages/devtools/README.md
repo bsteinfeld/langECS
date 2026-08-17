@@ -43,11 +43,22 @@ ESM only, Node >= 20.
 const server = await startDevtools(world, {
   port: 4477,          // default; occupied ports fall forward (4478, ...)
   host: '127.0.0.1',   // bind address — keep it loopback unless you know better
+  allowedHosts: [],    // extra hostnames accepted as a WebSocket Origin (see below)
   history: adapter,    // PersistenceAdapter with history()/loadStep() → enables time travel
   open: false,         // open the browser automatically
 });
 // ...
 await server.close();
+```
+
+`allowedHosts` is for reaching the inspector under a name the bind address does
+not carry — a tailnet MagicDNS name, a container hostname, a reverse proxy. The
+upgrade guard accepts loopback and `host`; anything else loads the page and then
+hangs at "connecting", because only the WebSocket is refused. Hostnames only, no
+scheme or port, and it stays an allowlist (`'*'` is not special):
+
+```ts
+await startDevtools(world, { host: '0.0.0.0', allowedHosts: ['dev-box', 'dev-box.tailnet.ts.net'] });
 ```
 
 Pass the same adapter the world persists to (e.g. `MemoryAdapter` from core or

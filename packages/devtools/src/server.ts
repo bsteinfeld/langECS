@@ -30,6 +30,19 @@ export interface DevtoolsOptions {
   port?: number;
   /** Default '127.0.0.1' — bind to a non-loopback host deliberately. */
   host?: string;
+  /**
+   * Extra hostnames accepted as a WebSocket `Origin`, on top of loopback and `host`.
+   *
+   * The bind address and the name a browser uses are not always the same string: a wildcard
+   * bind (`0.0.0.0`) names nothing, and a tailnet MagicDNS name, container hostname or reverse
+   * proxy reaches the same server under a name the socket never sees. Without this the page
+   * loads over such a name and then sits at "connecting" forever, because the upgrade is
+   * refused by the CSWSH guard.
+   *
+   * This is an allowlist, not an escape hatch — `'*'` is not special, and an unlisted origin is
+   * still refused. Hostnames only (no scheme, no port): `['dev-box', 'dev-box.tailnet.ts.net']`.
+   */
+  allowedHosts?: string[];
   /** Persistence adapter for the history strip + `load-step` time travel. */
   history?: PersistenceAdapter;
   /** OTLP span ring-buffer capacity (oldest dropped). Default 5000. */
@@ -113,9 +126,15 @@ function readBody(req: IncomingMessage): Promise<string> {
  * check ANY website open in a local browser could connect to the loopback
  * inspector and read/mutate the world. Allowed: no Origin (non-browser
  * clients — tests, CLIs), loopback origins on any port (covers the Vite dev
- * proxy on :5173), and origins whose hostname is the deliberately-bound host.
+ * proxy on :5173), origins whose hostname is the deliberately-bound host, and
+ * any hostname the caller listed in `allowedHosts` (see there for why a bound
+ * host is not always the name a browser uses).
  */
-function originAllowed(origin: string | undefined, boundHost: string): boolean {
+function originAllowed(
+  origin: string | undefined,
+  boundHost: string,
+  allowedHosts: readonly string[],
+): boolean {
   if (origin === undefined) return true;
   let hostname: string;
   try {
@@ -124,7 +143,17 @@ function originAllowed(origin: string | undefined, boundHost: string): boolean {
     return false;
   }
   const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-  return loopback || hostname === boundHost;
+  // IPv6 origins arrive bracketed (`http://[::1]:4477`); URL.hostname keeps the
+  // brackets, so compare the unbracketed form against the configured names too.
+  const bare =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  return (
+    loopback ||
+    hostname === boundHost ||
+    bare === boundHost ||
+    allowedHosts.includes(hostname) ||
+    allowedHosts.includes(bare)
+  );
 }
 
 /**
@@ -217,6 +246,7 @@ export async function startDevtools(
   const basePort = options?.port ?? 4477;
   const spanBufferSize = options?.spanBufferSize ?? 5000;
   const history = options?.history;
+  const allowedHosts = options?.allowedHosts ?? [];
 
   const spanBuffer: SpanRecord[] = [];
   // `null` (and stays null) when no history adapter is wired — the UI hides
@@ -244,7 +274,7 @@ export async function startDevtools(
   const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
-    verifyClient: ({ origin }: { origin?: string }) => originAllowed(origin, host),
+    verifyClient: ({ origin }: { origin?: string }) => originAllowed(origin, host, allowedHosts),
   });
   // ws forwards the underlying http server's 'error' events to the
   // WebSocketServer; without a listener that re-emit throws (unhandled
