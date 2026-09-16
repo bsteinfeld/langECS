@@ -136,6 +136,20 @@ Two rules hold across all of them:
 To put spend into *state* — where a watchdog can see it and R30 can merge it —
 write it from a system with `sumReducer()`, not from the `withCost` sink.
 
+### Budgeting the outer system deadline
+
+A system's `timeoutMs` includes every model attempt, retry backoff, fallback, and
+the system's own work. Give that outer deadline enough time for the whole chain
+and any recovery that must commit. If it expires first, the engine discards the
+pair's buffered writes, records `SystemTimeoutError`, and refuses later writes
+from that pair. Its JavaScript catch/finally code may still execute, but cannot
+commit recovery through the abandoned buffer. Handle that timeout in a separate
+error-recovery system when recovery must survive the outer deadline.
+
+`withTimeout` relies on the provider honoring its abort signal. Placing it outside
+a retry/fallback chain shares one deadline across the chain; placing it around
+individual models gives those calls their own deadlines.
+
 ## Record and replay
 
 `scriptedModel` (R44) is why the choreography tests exist, but you write the

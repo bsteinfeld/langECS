@@ -397,6 +397,18 @@ between the live demo and its deterministic test.
 
 ---
 
+## Narration
+
+`Phase` and `Goal` hold display text; `narrate(entity)` and `narrateWorld(world)`
+combine it with waiting, error, and cancellation state. Leave `Goal` absent while
+the goal is unknown. Neither component controls scheduling.
+
+Both use deterministic last-write-wins reducers. Applications that need stop
+messages to outrank progress should define their own narration component and
+renderer with an explicit priority and reset policy. Reducers run for `add`;
+`set` deliberately replaces the value and bypasses the reducer. A priority reducer
+also applies across steps, so use an explicit reset when work resumes.
+
 ## See also
 
 - [@langecs/core](../core/README.md) — the engine API this package builds on
