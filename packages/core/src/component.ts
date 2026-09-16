@@ -1,4 +1,21 @@
-import { DuplicateComponentError } from './errors';
+import { DuplicateComponentError, LangECSError } from './errors';
+
+// Identity belongs to one core instance (R7). Diagnose duplicate installs/bundles
+// before they can create mutually invisible registries; never alias definitions.
+// This slot is diagnostic metadata only and works in any JavaScript realm (R1).
+const INSTANCE_KEY = Symbol.for('langecs.coreInstance.v1');
+const instanceSlots = globalThis as unknown as Record<symbol, unknown>;
+const moduleUrl = (import.meta as { url?: string }).url ?? '(module URL unavailable)';
+const previousInstance = instanceSlots[INSTANCE_KEY] as { url: string } | undefined;
+if (previousInstance !== undefined) {
+  throw new LangECSError(
+    'Multiple @langecs/core instances in one JavaScript realm. ' +
+      `First module: ${previousInstance.url}. Second module: ${moduleUrl}. ` +
+      'Use matching @langecs packages with one shared core via peer dependencies, ' +
+      'and configure your bundler to deduplicate @langecs/core.',
+  );
+}
+instanceSlots[INSTANCE_KEY] = { url: moduleUrl };
 
 /**
  * A pending (component, value) pair produced by calling a `ComponentType`.

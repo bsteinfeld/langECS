@@ -3,6 +3,7 @@ import {
   createWorld,
   defineAgent,
   defineComponent,
+  defineEvent,
   defineSystem,
   defineTag,
   type Msg,
@@ -112,4 +113,18 @@ test('T22 R39: tags are name-branded — distinct tags are not interchangeable',
   // SystemPrompt structurally equals ModelRef (both ComponentType<string>).
   const SystemPrompt = defineComponent<string>({ name: 'typesSystemPrompt' });
   expectTypeOf(SystemPrompt).toEqualTypeOf(ModelRef);
+});
+
+test('R60 typed events infer payloads only from their declared reference', () => {
+  // Never executed: this function is a compile-time assertion over the public API.
+  const check = (ctx: import('../src/index').SystemCtx) => {
+    const Word = defineEvent<'yes' | 'no'>('type.answer');
+    ctx.emit(Word, 'yes');
+    // @ts-expect-error payload cannot widen the declared string union
+    ctx.emit(Word, 'maybe');
+    const Shape = defineEvent<{ kind: 'start'; value: number }>('type.shape');
+    // @ts-expect-error wrong discriminant must not widen the event contract
+    ctx.emit(Shape, { kind: 'stop', value: 1 });
+  };
+  expect(typeof check).toBe('function');
 });

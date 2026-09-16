@@ -26,7 +26,6 @@ export interface FsAdapter extends PersistenceAdapter {
 const STEP_FILE = /^step-(\d+)\.json$/;
 
 const stepFileName = (step: number): string => `step-${String(step).padStart(6, '0')}.json`;
-
 const isENOENT = (err: unknown): boolean =>
   err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
 

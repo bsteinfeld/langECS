@@ -22,6 +22,7 @@ import {
   PendingToolCalls,
   RetryPolicy,
   SystemPrompt,
+  TokenEvent,
   type ToolCall,
   Tools,
 } from './components';
@@ -56,8 +57,10 @@ function parseApproval(value: unknown): { approved: boolean; reason?: string } {
 /**
  * Calls the model whenever the conversation owes an answer (`MessageWaiting`).
  *
- * - Streams tokens to the live event stream via `ctx.emit({ kind: 'token', text })`
- *   when the model implements `stream` (R23); the final message still lands in
+ * - Streams tokens to the live event stream via the typed `TokenEvent` (R60)
+ *   when the model implements `stream`; observers can filter on
+ *   `event.name === 'token'`, and the payload keeps its `{ kind, text }` shape so
+ *   existing consumers are unaffected. The final message still lands in
  *   `Messages` at the barrier.
  * - A reply with tool calls sets `PendingToolCalls` and keeps `MessageWaiting`;
  *   `executeTools` appends tool results to `Messages` (foreign dirt), which
@@ -87,7 +90,7 @@ export const callLLM = defineSystem({
     const result = model.stream
       ? await model.stream(req, (chunk) => {
           if (chunk.text !== undefined && chunk.text.length > 0) {
-            ctx.emit({ kind: 'token', text: chunk.text });
+            ctx.emit(TokenEvent, { kind: 'token', text: chunk.text });
           }
         })
       : await model.generate(req);
