@@ -1,6 +1,6 @@
 {
   "name": "@langecs/stdlib",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standard components, systems, and agent presets for LangECS (Inbox, retry, ReAct, human-in-the-loop)",
   "license": "MIT",
   "type": "module",

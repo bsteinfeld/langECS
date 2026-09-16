@@ -1,6 +1,6 @@
 {
   "name": "@langecs/ai-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vercel AI SDK model adapter for LangECS — every provider via one dependency",
   "license": "MIT",
   "type": "module",

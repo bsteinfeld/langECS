@@ -1,6 +1,6 @@
 {
   "name": "@langecs/langchain",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "LangChain.js model adapter for LangECS — use any LangChain chat model as a LangECS Model",
   "license": "MIT",
   "type": "module",

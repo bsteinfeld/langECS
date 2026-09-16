@@ -1,6 +1,6 @@
 {
   "name": "@langecs/devtools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Visual inspector for LangECS worlds — live entity/component state, interactive mutation, flight-recorder timeline, OTLP trace waterfall, human-in-the-loop",
   "license": "MIT",
   "type": "module",

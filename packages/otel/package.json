@@ -1,6 +1,6 @@
 {
   "name": "@langecs/otel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenTelemetry instrumentation for LangECS — run/step/system spans, GenAI semantic conventions for models and tools, metrics",
   "license": "MIT",
   "type": "module",

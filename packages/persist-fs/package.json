@@ -1,6 +1,6 @@
 {
   "name": "@langecs/persist-fs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Filesystem persistence adapter for LangECS worlds — snapshots, history, time travel",
   "license": "MIT",
   "type": "module",
