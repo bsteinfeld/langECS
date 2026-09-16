@@ -58,7 +58,7 @@ component edits*. Both are visible in `world.getTrace()` like any other step.
 
 `resume-safety.test.ts` picks up where the kill-and-resume test stops, because a
 world that can sit paused for a day will eventually be resumed by a *different
-build*. Two failure modes, both asserted:
+build*. The tests cover migrations and an independently supplied expected step:
 
 **A component rename orphans the paused world.** Quiescence is the pause, and
 `world.load` throws on any name it cannot resolve — so shipping a rename while
@@ -80,21 +80,11 @@ test also shows the deploy that *forgot*: `canLoad` reports
 `missingMigration: { from: 1, to: 2 }` with no side effects, so CI can fail the
 build instead of the user.
 
-**Two workers resume the same approval.** Resuming enqueues a new job that loads
-the snapshot, so a double-click or a queue retry delivers it twice. With
-`fence: true` plus `await world.claim()` before running, one worker wins and the
-other rejects with `FenceError` — and `delete_record` executes **exactly once**
-across both:
-
-```ts
-world.load(snapshot)
-await world.claim()          // FenceError if another worker already owns it
-await world.resume(agent, true)
-```
-
-The ordering is the point. Fencing only at save time would stop the loser from
-writing a divergent timeline, but by then it has already deleted the record.
-Claiming before any step runs is what makes the side effect exactly-once. See
+**Expected step checks.** `load(snapshot, { expectedStep })` rejects a snapshot
+whose step differs from the application's expectation. It does not read storage
+or arbitrate concurrent workers; passing `snapshot.step` as its own expectation
+cannot detect staleness. Concurrent resume ownership is deferred beyond 0.2.0.
+Serialize jobs per world and make retried effects idempotent. See
 [schema evolution and resume safety](../../docs/guides/schema-evolution-and-resume-safety.md).
 
 ## Side-by-side with the LangGraph.js original

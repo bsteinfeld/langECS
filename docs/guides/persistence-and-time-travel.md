@@ -238,7 +238,7 @@ Two guarantees make persistence trustworthy under failure:
 
 - [Schema evolution and resume safety](./schema-evolution-and-resume-safety.md) — the
   operational sequel to this guide: surviving a component rename while a world is
-  paused, checking loadability from CI, and fencing concurrent resumes
+  paused, checking loadability from CI, and the limits of concurrent resumes
 - [examples/time-travel](../../examples/time-travel/README.md) — runnable rewind-and-fork
   demo against a real model
 - [examples/human-in-the-loop](../../examples/human-in-the-loop/README.md) — persistence

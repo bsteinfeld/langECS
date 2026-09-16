@@ -1,9 +1,9 @@
 # Schema evolution and resume safety
 
-*Renaming a component without orphaning live worlds, and making sure two workers
-never resume the same snapshot. Requirements: R54 (recipe versions and
-migrations), R55 (non-strict load), R56 (`canLoad`), R57 (fencing and
-`expectedStep`), R58 (write cadence).*
+*Renaming a component without orphaning live worlds, checking an expected
+snapshot step, and understanding the limits of concurrent resumes. Requirements:
+R54 (recipe versions and migrations), R55 (non-strict load), R56 (`canLoad`),
+R57 (`expectedStep`), R58 (write cadence).*
 
 This guide exists because of one bug that two of the engine's best features
 produce together.
@@ -138,100 +138,28 @@ report.droppedPairs  // [{ entity: 7, system: 'newerSystem', … }]  ← gone
 Use `strict: false` for rolling deploys and forward-compatibility. Keep the
 default (`strict: true`) everywhere else — you want the loud failure.
 
-## Two workers, one snapshot
-
-The recommended deployment shape is: a run drives to quiescence, the job
-completes, and resuming enqueues a *new* job that loads the snapshot. That is
-exactly the shape where two resumes race — a double-click, two browser tabs, a
-queue retry after a timeout, or two workers picking up the same message. Nothing
-about it is exotic, and the divergence is **silent**: both worlds run happily,
-and one of them is writing history nobody will ever read.
-
-Two mechanisms, catching it at different moments.
-
-### `expectedStep` — cheap and synchronous
+## Checking an expected step
 
 ```ts
-world.load(snapshot, { expectedStep: snapshot.step })   // StaleSnapshotError on mismatch
+// expectedStep comes from the application's independently tracked workflow state.
+world.load(snapshot, { expectedStep }) // StaleSnapshotError on mismatch
 ```
 
-No adapter involvement. Enough to catch a resume that read a snapshot another
-worker has since advanced.
+This compares the supplied snapshot with a caller-supplied expectation, without
+reading the adapter. `expectedStep: snapshot.step` alone is tautological. The
+comparison does not prove that storage is still current when work begins.
 
-### Fencing — the durable guarantee
+## Concurrent resumes
 
-The resume recipe has four steps, and the order matters:
+Concurrent resume ownership (M4) is deferred beyond 0.2.0. There is no
+`world.claim()`, world fencing option, or adapter fencing API in this release.
+A monotonic step claim did not provide a safe ownership handoff across persisted
+boundaries and process restarts. Saving a checkpoint does not make an external
+side effect atomic with that checkpoint.
 
-```ts
-const world = createWorld({ id: 'deck-42', persistence: adapter, fence: true })
-world.use(recordsAgent)
-world.load(snapshot)
-await world.claim()                 // throws FenceError if another worker owns it
-await world.resume(entity, true)
-```
-
-**`claim()` is what makes side effects exactly-once.** The save-time fence alone
-does not: it stops the loser from persisting a divergent timeline, but by then its
-systems have already run — the refund is issued, the record is already deleted.
-Claiming before any step executes is what stops the loser from doing the work at
-all. The example test asserts exactly this: two workers resume one approval, and
-`delete_record` runs **once**.
-
-`claim()` guards two different races, and it needs both:
-
-- **Two workers on the same snapshot** — resolved by the fence. Both ask to claim
-  the same step; exactly one is granted.
-- **A worker on a stale snapshot** — resolved by a step check, because the fence
-  *cannot* catch this one. A monotonic fence refuses a step at or below one
-  already claimed, but a worker holding an older snapshot claims a *lower* step,
-  so if it claims first there is nothing to refuse it with. `claim()` therefore
-  also compares against the adapter's latest persisted step and throws
-  `StaleSnapshotError` when it is behind. Always claim against a freshly loaded
-  snapshot, not a cached one.
-
-With `fence: true`, the engine also calls `adapter.fence(worldId, step)` immediately
-**before each save** — the moment divergence would actually become durable, and
-already an awaited async boundary — and rejects the run with `FenceError` if
-refused. The loser stops rather than keep writing.
-
-```
-worker A  load(step 5) → run → fence(id, 6) → true  → saves  ✓
-worker B  load(step 5) → run → fence(id, 6) → false → FenceError, stops
-```
-
-`fence` must be **monotonic per worldId**: granting a step implicitly refuses
-that step and everything below it. Making that atomic is subtler than it looks.
-`O_EXCL`/`wx` is atomic only against an **identical key**, so two callers claiming
-*different* steps never contend — and a read-then-write grants both, which is two
-divergent timelines and no error. `persist-fs` therefore creates its lock **first**
-and validates **after**:
-
-```ts
-await writeFile(lockPath(step), String(step), { flag: 'wx' })  // EEXIST ⇒ same step taken
-if (await highestFence(dir) > step) { await rm(lockPath(step)); return false }  // stale ⇒ withdraw
-```
-
-The highest step wins whether the calls race or not, and a loser never leaves a
-lock behind.
-
-Two limits worth knowing, because they are not obvious:
-
-- **Fencing coordinates only the worlds that opted in.** `save()` does not consult
-  claims, so a world created *without* `{ fence: true }` on the same id and adapter
-  can still overwrite a fenced world's history. Mixing the two on one id is
-  unsupported — a stray ops script or devtools session is exactly the case to
-  watch.
-- **A fence cannot see the future.** It refuses a step at or below one already
-  claimed, so a *stale* worker claiming a *lower* step first is caught by
-  `claim()`'s comparison against the store, not by the fence.
-
-**Fencing is opt-in per world, and deliberately not implied by the adapter having
-the method.** A time-travel world legitimately rewrites steps it has already
-written (R38), and an automatic fence would refuse its own replay. Enable it on
-production worlds; leave it off for rewind, fork, and tests.
-
-When a world loses the fence, its in-memory state is ahead of what was persisted.
-Discard it and reload — do not try to re-save.
+Serialize work for each world in the application or job queue, and use idempotent
+external effects when work may be retried. The engine does not guarantee
+exactly-once effects across independent workers.
 
 ## Write cadence
 
@@ -254,9 +182,8 @@ process dies mid-run under that setting, you lose back to the last run boundary,
 not to the beginning.
 
 One related fix: a boundary is now never written twice. The engine used to persist
-the final step at its barrier *and* again at run end — harmless against an
-idempotent adapter, but a monotonic fence would have refused the world's own
-second claim on the same step.
+the final step at its barrier *and* again at run end. Revision tracking avoids
+that duplicate write while preserving same-step changes such as idle cancellation.
 
 ## See also
 

@@ -42,8 +42,8 @@ immutable (R17). Every reducer here returns a new value; one of your own that
 mutates `current` corrupts committed state in a way the engine cannot detect.
 
 Two smaller choices are deliberate: `maxByReducer` keeps `current` on a tie, and
-`dedupeByReducer` keeps the first occurrence — so neither result depends on
-barrier ordering among equals.
+`dedupeByReducer` keeps the first occurrence. Both select the earliest value in
+deterministic barrier order; changing that order can select a different equal.
 
 ## Typed custom events
 
@@ -198,3 +198,17 @@ recording v1: 2 call(s)
   which is a different tool from `withRetry` around one call
 - [debugging systems](./debugging-systems.md) — the flight recorder a replayed
   run reproduces
+
+## Cache and fixture boundaries
+
+`withCache` stores detached message, usage, and finishReason data. Provider `raw`
+is omitted from hits; a result that cannot be serialized bypasses caching without
+failing the model call. The original provider result is still returned on a miss.
+
+Recordings fix the request and ordinal when a call starts. Concurrent completions
+may reach the sink out of order; sort by `index` when combining JSON Lines.
+`recording()` already returns invocation order, and unsuccessful captures may leave
+gaps. Sink entries and returned provider results cannot mutate recorded history.
+Identical requests consume their recorded answers in invocation order. Replay
+rejects a pre-aborted request without consuming an entry and checks cancellation
+between streamed chunks.

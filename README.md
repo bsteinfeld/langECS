@@ -234,7 +234,7 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 - [docs/guides/human-in-the-loop.md](docs/guides/human-in-the-loop.md) — pause-by-quiescence: `AwaitingHuman`, `resume()`, approval flows that survive process death
 - [docs/guides/multi-agent.md](docs/guides/multi-agent.md) — supervisor/worker fan-out, `Inbox` fan-in, runtime agent spawning, writer↔critic cycles
 - [docs/guides/persistence-and-time-travel.md](docs/guides/persistence-and-time-travel.md) — snapshot anatomy, the adapter contract, the restore recipe, rewind-and-fork
-- [docs/guides/schema-evolution-and-resume-safety.md](docs/guides/schema-evolution-and-resume-safety.md) — **renaming a component without orphaning live worlds**: `recipeVersion` + migrations, `canLoad` as a deploy gate, `strict: false` for rolling deploys, and adapter fencing so two workers can't resume one snapshot and diverge
+- [docs/guides/schema-evolution-and-resume-safety.md](docs/guides/schema-evolution-and-resume-safety.md) — **renaming a component without orphaning live worlds**: `recipeVersion` + migrations, `canLoad` as a deploy gate, `strict: false` for rolling deploys, an expected-step check, and the limits of concurrent resume safety
 - [docs/guides/streaming-and-observability.md](docs/guides/streaming-and-observability.md) — the run event stream, token streaming via `ctx.emit`, the flight recorder
 - [docs/guides/model-middleware-and-fixtures.md](docs/guides/model-middleware-and-fixtures.md) — the things everyone writes by hand: standard reducers (incl. the bounded one), typed custom events, `wrapModel` with retry/timeout/fallback/rate-limit/cost/cache, and record-and-replay of real model calls as deterministic fixtures
 
@@ -243,7 +243,7 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 - [docs/experiment-verdict.md](docs/experiment-verdict.md) — the aggregate verdict on the six ports: hypothesis validated, with the wins/losses pattern and what gates a release
 - [docs/prior-art.md](docs/prior-art.md) — what already exists (ArgOS, Simulation Streams, blackboard systems, Pregel, production rules, Linda, durable execution) and which claims we soften because of it
 - [DESIGN.md](DESIGN.md) — the decision record: why each piece is the way it is
-- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R53) and the required test matrix (T1–T33)
+- [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R64) and the required test matrix (T1–T62)
 - [docs/naming.md](docs/naming.md) — the rename research (`langecs` is a working title)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, commands, repo conventions
 
