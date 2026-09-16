@@ -30,7 +30,19 @@ export type RunEvent =
   | { type: 'system:start'; step: number; system: string; entity: number }
   | { type: 'system:end'; step: number; system: string; entity: number; ms: number }
   | { type: 'system:error'; step: number; system: string; entity: number; error: SerializedError }
-  | { type: 'custom'; step: number; system: string; entity: number; data: unknown }
+  | {
+      type: 'custom';
+      step: number;
+      system: string;
+      entity: number;
+      /**
+       * Set when emitted through a typed `EventRef` (R60) — `ctx.emit(Token, …)`.
+       * Absent for the untyped `ctx.emit(data)` form, so observers can filter by
+       * name instead of parsing every payload to find the ones they care about.
+       */
+      name?: string;
+      data: unknown;
+    }
   | {
       type: 'step:applied';
       step: number;

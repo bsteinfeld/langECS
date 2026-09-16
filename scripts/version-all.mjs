@@ -2,9 +2,9 @@
 /**
  * Lockstep version bump for every publishable workspace package.
  *
- * All seven `packages/*` ship as one release: they depend on each other with
- * `workspace:*`, which pnpm rewrites to the exact version at publish time, so a
- * mixed set of versions has no way to express "these were built together".
+ * All seven `packages/*` ship as one tested release. Satellites use a
+ * `workspace:^` core peer: compatible patches can share one host core, while
+ * 0.x minor upgrades require upgrading the related packages together.
  *
  *   pnpm version:all 0.2.0     # explicit version
  *   pnpm version:all patch     # or minor / major / prerelease

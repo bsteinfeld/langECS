@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r run typecheck",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "check:packaging": "node scripts/check-packaging.mjs",
     "version:all": "node scripts/version-all.mjs",
     "publish:dry": "pnpm -r --filter \"./packages/*\" publish --dry-run --access public --no-git-checks",
     "publish:packages": "pnpm -r --filter \"./packages/*\" publish --access public --no-git-checks"

@@ -609,6 +609,33 @@ test('WS upgrade rejects cross-site origins, allows loopback and absent Origin',
   await client.waitFor((m) => m.type === 'hello', 'hello');
 });
 
+test('allowedHosts admits a name the bind address does not carry, and nothing else', async () => {
+  // The case this exists for: bound to a wildcard or an IP, reached through a
+  // MagicDNS/container/proxy hostname. Without the allowlist the page loads and
+  // then hangs at "connecting", because only the upgrade is refused.
+  const world = createWorld({ id: 'dtsrv-allowedhosts' });
+  const server = await start(world, { allowedHosts: ['dev-box', 'dev-box.tailnet.ts.net'] });
+
+  const upgrades = async (origin: string): Promise<boolean> =>
+    await new Promise<boolean>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, { headers: { origin } });
+      ws.once('open', () => {
+        ws.close();
+        resolve(true);
+      });
+      ws.once('error', () => resolve(false));
+    });
+
+  expect(await upgrades('http://dev-box:4477')).toBe(true);
+  expect(await upgrades('https://dev-box.tailnet.ts.net')).toBe(true);
+  expect(await upgrades('http://[::1]:5173')).toBe(true);
+  // Still an allowlist: a listed name does not open the door to anything else,
+  // and a suffix that merely ends in one is a different host.
+  expect(await upgrades('https://evil.example')).toBe(false);
+  expect(await upgrades('http://notdev-box')).toBe(false);
+  expect(await upgrades('http://dev-box.evil.example')).toBe(false);
+});
+
 test('world push at step:applied reports the step the state belongs to', async () => {
   // Core emits step:applied BEFORE incrementing world.step (SPEC §5), so the
   // server must stamp the broadcast with the event's own step number.

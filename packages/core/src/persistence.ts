@@ -1,8 +1,9 @@
 import type { Snapshot } from './snapshot';
 
 /**
- * Checkpointer contract (R37). The engine awaits `save` after every step
- * barrier and once at run end (the quiescent boundary).
+ * Checkpointer contract (R37). The engine awaits `save` at the cadence set by
+ * `createWorld({ saveEvery })` — every step barrier by default — and once at run
+ * end (the quiescent boundary).
  */
 export interface PersistenceAdapter {
   save(snapshot: Snapshot): void | Promise<void>;

@@ -43,7 +43,10 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "@langecs/core": "workspace:^"
+  },
+  "devDependencies": {
     "@langecs/core": "workspace:*"
   },
   "publishConfig": {

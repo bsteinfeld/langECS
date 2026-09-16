@@ -43,13 +43,12 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@langecs/core": "workspace:*"
-  },
   "peerDependencies": {
+    "@langecs/core": "workspace:^",
     "@opentelemetry/api": "^1.9.0"
   },
   "devDependencies": {
+    "@langecs/core": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.8.0",
     "@opentelemetry/sdk-metrics": "^2.8.0",
