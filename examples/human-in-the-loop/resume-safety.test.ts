@@ -1,10 +1,8 @@
 // The operational sequel to kill-and-resume: what happens when the deploy that
-// resumes a paused world is not the same build that paused it, and what happens
-// when two workers try to resume it at once.
+// resumes a paused world is not the same build that paused it.
 //
 // Zero network — the model is core's scriptedModel. The "deploy" is a second
-// world built from a renamed vocabulary, and the "two workers" are two worlds
-// sharing one fsAdapter directory, exactly like the kill-and-resume test.
+// world built from a renamed vocabulary, using the kill-and-resume adapter.
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -50,7 +48,7 @@ function deployV1(adapter: FsAdapter): World {
 /** Deployment v2: renamed vocabulary. `migrate: false` is the deploy that forgot. */
 function deployV2(
   adapter: FsAdapter,
-  opts?: { migrate?: boolean; fence?: boolean },
+  opts?: { migrate?: boolean },
 ): {
   world: World;
   deletions: number[];
@@ -60,7 +58,6 @@ function deployV2(
     id: WORLD_ID,
     persistence: adapter,
     recipeVersion: RECIPE_V2,
-    ...(opts?.fence === true ? { fence: true } : {}),
   });
   world.use(recordsAgent);
   world.use(attachApproverNote);
@@ -136,44 +133,6 @@ test('with a migration, the paused approval survives the rename and completes', 
   // And the world is written back at the new version, so the migration runs once
   // and never again.
   expect(next.world.snapshot().recipeVersion).toBe(RECIPE_V2);
-});
-
-test('two workers resuming the same approval: exactly one deletes the record', async () => {
-  const adapter = fsAdapter({ dir });
-  const { snapshot, agent } = await parkedSnapshot(adapter);
-
-  // The shape the recommended deployment produces: resuming enqueues a new job
-  // that loads the snapshot. A double-click, two tabs, or a queue retry after a
-  // timeout delivers it twice.
-  const workerA = deployV2(adapter, { fence: true });
-  const workerB = deployV2(adapter, { fence: true });
-  workerA.world.load(snapshot);
-  workerB.world.load(snapshot);
-
-  // Claiming BEFORE any step runs is what makes the destructive tool
-  // exactly-once. Fencing only at save time would stop the loser from writing a
-  // divergent timeline, but by then it has already deleted the record.
-  const attempt = async (w: (typeof workerA)['world']) => {
-    await w.claim();
-    return w.resume(agent, true);
-  };
-  const [a, b] = await Promise.allSettled([attempt(workerA.world), attempt(workerB.world)]);
-
-  // One resume wins; the other is fenced out instead of silently writing a
-  // divergent history. Without this both worlds run happily and one of them is
-  // writing state nobody will ever read.
-  expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected']);
-  const loser = (a.status === 'rejected' ? a : b) as PromiseRejectedResult;
-  expect((loser.reason as Error).name).toBe('FenceError');
-
-  // The destructive tool ran exactly once across both workers — which is the
-  // outcome that actually matters for an approval flow.
-  expect([...workerA.deletions, ...workerB.deletions]).toEqual([42]);
-
-  // On disk there is one timeline: no two snapshots claim the same step.
-  const history = await adapter.history(WORLD_ID);
-  const steps = history.map((h) => h.step);
-  expect(new Set(steps).size).toBe(steps.length);
 });
 
 test('expectedStep catches a resume that read a stale snapshot, with no adapter involved', async () => {

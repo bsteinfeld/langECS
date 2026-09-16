@@ -1,13 +1,11 @@
-// Snapshot schema evolution (R54-R56), resume fencing (R57) and save cadence
-// (R58) — the properties that decide whether "durable worlds" survives a deploy
-// and a double-click, not just a process restart.
+// Snapshot schema evolution (R54-R56), expected steps (R57) and save cadence
+// (R58) — preserving durable worlds across deploys and process restarts.
 
 import { expect, test } from 'vitest';
 import {
   createWorld,
   defineComponent,
   defineSystem,
-  delay,
   MemoryAdapter,
   type Snapshot,
   scriptedModel,
@@ -244,15 +242,15 @@ test('R55 strict:false reports dropped pendingPairs, because dirt cannot be pres
   expect(next.snapshot().pendingPairs).toEqual([]);
 });
 
-test('R57 expectedStep catches a resume that lost a race, with no adapter involved', async () => {
+test('R57 expectedStep compares a snapshot with the supplied expectation', async () => {
   const adapter = new MemoryAdapter();
-  const world = createWorld({ id: 'fenced', persistence: adapter });
+  const world = createWorld({ id: 'expected-step', persistence: adapter });
   world.use(writeArticle);
   world.spawn(Topic('a'));
   await world.run();
 
-  const snapshot = (await adapter.load('fenced')) as Snapshot;
-  const fresh = createWorld({ id: 'fenced' });
+  const snapshot = (await adapter.load('expected-step')) as Snapshot;
+  const fresh = createWorld({ id: 'expected-step' });
   fresh.use(writeArticle);
 
   expect(() => fresh.load(snapshot, { expectedStep: snapshot.step + 1 })).toThrow(
@@ -261,129 +259,14 @@ test('R57 expectedStep catches a resume that lost a race, with no adapter involv
   expect(fresh.load(snapshot, { expectedStep: snapshot.step }).migrated).toEqual([]);
 });
 
-test('R57 two workers resume one snapshot and exactly one advances', async () => {
-  const adapter = new MemoryAdapter();
-  const seed = createWorld({ id: 'race', persistence: adapter, fence: true });
-  seed.use(writeArticle);
-  seed.spawn(Topic('seed'));
-  await seed.run();
-  const shared = (await adapter.load('race')) as Snapshot;
-
-  // The recommended deployment shape, raced: a double-click, two tabs, or a
-  // queue retry after a timeout produces exactly this.
-  const build = () => {
-    const w = createWorld({ id: 'race', persistence: adapter, fence: true });
-    w.use(writeArticle);
-    w.load(shared);
-    // New work for each worker, so both genuinely want to advance the world.
-    w.query(Topic)[0]?.set(Topic, 'contended');
-    return w;
-  };
-  const workerA = build();
-  const workerB = build();
-
-  const [a, b] = await Promise.allSettled([workerA.run(), workerB.run()]);
-
-  // One wins outright; the loser is fenced out rather than silently writing a
-  // divergent history nobody will read.
-  const outcomes = [a.status, b.status].sort();
-  expect(outcomes).toEqual(['fulfilled', 'rejected']);
-  const loser = a.status === 'rejected' ? a : (b as PromiseRejectedResult);
-  expect((loser.reason as Error).name).toBe('FenceError');
-  expect((loser.reason as Error).message).toMatch(/lost the race and has stopped/);
-
-  // The persisted history has exactly one step 2 — no interleaved timeline.
-  const history = adapter.history('race');
-  expect(history.filter((h) => h.step === 2)).toHaveLength(1);
-});
-
-test('R57 claim() fences BEFORE any step runs, so side effects stay exactly-once', async () => {
-  const adapter = new MemoryAdapter();
-  const ran: string[] = [];
-  const sideEffect = defineSystem({
-    name: 'sideEffect',
-    query: [Topic],
-    run: (e) => {
-      ran.push(e.get(Topic));
-      e.set(Article, { text: 'done' });
-    },
-  });
-  const seed = createWorld({ id: 'claim', persistence: adapter });
-  seed.use(sideEffect);
-  seed.spawn(Topic('seed'));
-  await seed.run();
-  const shared = (await adapter.load('claim')) as Snapshot;
-
-  const worker = () => {
-    const w = createWorld({ id: 'claim', persistence: adapter, fence: true });
-    w.use(sideEffect);
-    w.load(shared);
-    w.query(Topic)[0]?.set(Topic, 'contended');
-    return w;
-  };
-  const a = worker();
-  const b = worker();
-  ran.length = 0;
-
-  const attempt = async (w: ReturnType<typeof worker>) => {
-    // The ordering that matters: claim, THEN run.
-    await w.claim();
-    return w.run();
-  };
-  const results = await Promise.allSettled([attempt(a), attempt(b)]);
-
-  expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
-  // Fencing only at save time would let the loser's systems run first — a
-  // duplicate refund, a second delete — and refuse merely the write. Claiming up
-  // front is what prevents the work itself.
-  expect(ran).toEqual(['contended']);
-});
-
-test('R57 claim() refuses a worker resuming a STALE snapshot, even if it claims first', async () => {
-  const adapter = new MemoryAdapter();
-  const seed = createWorld({ id: 'stale', persistence: adapter });
-  seed.use(writeArticle);
-  seed.spawn(Topic('one'));
-  await seed.run();
-  const older = (await adapter.load('stale')) as Snapshot; // step 1
-
-  // Someone advances the world while our worker still holds the older snapshot.
-  const ahead = createWorld({ id: 'stale', persistence: adapter });
-  ahead.use(writeArticle);
-  ahead.load(older);
-  ahead.query(Topic)[0]?.set(Topic, 'two');
-  await ahead.run();
-  expect(ahead.step).toBeGreaterThan(older.step);
-
-  // The stale worker claims FIRST in fence terms — its step is lower, so a
-  // monotonic fence has nothing to refuse it with. Without the staleness check it
-  // would be granted, run its side effects, and only be refused at its first save.
-  const stale = createWorld({ id: 'stale', persistence: adapter, fence: true });
-  stale.use(writeArticle);
-  stale.load(older);
-  await expect(stale.claim()).rejects.toThrow(/Snapshot is at step 1, but step 2 was expected/);
-
-  // A worker holding the CURRENT snapshot claims fine.
-  const current = createWorld({ id: 'stale', persistence: adapter, fence: true });
-  current.use(writeArticle);
-  current.load((await adapter.load('stale')) as Snapshot);
-  await expect(current.claim()).resolves.toBeUndefined();
-});
-
-test('R57 claim() refuses to pretend when the adapter cannot arbitrate', async () => {
-  const world = createWorld({ id: 'noadapter' });
-  await expect(world.claim()).rejects.toThrow(/needs a persistence adapter implementing fence/);
-});
-
-test('R57 fencing is opt-in, so time travel can still rewrite its own steps', async () => {
+test('R38 time travel can still rewrite its own steps', async () => {
   const adapter = new MemoryAdapter();
   const world = createWorld({ id: 'tt', persistence: adapter });
   world.use(writeArticle);
   world.spawn(Topic('first'));
   await world.run();
 
-  // Rewind and re-run: an unfenced world may legitimately rewrite step 2 (R38).
-  // If the adapter's fence applied automatically, this would be refused.
+  // Rewind and re-run: time travel may legitimately rewrite step 2 (R38).
   const rewound = createWorld({ id: 'tt', persistence: adapter });
   rewound.use(writeArticle);
   rewound.load((await adapter.loadStep('tt', 1)) as Snapshot);
@@ -534,32 +417,6 @@ test('R50/R58 an idle cancel is persisted, so the world cannot resume un-cancell
   resumed.use(writeArticle);
   resumed.load(stored);
   expect((await resumed.run()).status).toBe('cancelled');
-});
-
-test('R57 cancelling a FENCED world does not fence it out of its own step', async () => {
-  const adapter = new MemoryAdapter();
-  const slow = defineSystem({
-    name: 'slowFenced',
-    query: [Topic],
-    run: async (_e, ctx) => {
-      await delay(60_000, ctx.signal);
-    },
-  });
-  const world = createWorld({ id: 'selffence', persistence: adapter, fence: true });
-  world.use(slow);
-  world.spawn(Topic('a'));
-  await world.claim();
-
-  const run = world.run();
-  world.cancel('stop');
-  // The fence is keyed on the step, the save on the revision. A cancellation
-  // changes state WITHOUT advancing the step, so the run-end save re-claimed a
-  // step this same world already owned and was refused — the run rejected with
-  // FenceError naming a rival that did not exist, and the cancellation was lost.
-  const result = await run;
-  expect(result.status).toBe('cancelled');
-  const stored = (await adapter.load('selffence')) as Snapshot;
-  expect(stored.entities.some((e) => 'Cancelled' in e.components)).toBe(true);
 });
 
 test('R56 canLoad reports a throwing migration instead of propagating it', async () => {

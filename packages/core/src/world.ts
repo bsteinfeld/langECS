@@ -10,7 +10,6 @@ import {
   DeserializeError,
   DuplicateMigrationError,
   DuplicateSystemError,
-  FenceError,
   LangECSError,
   MissingResourceError,
   RecipeVersionError,
@@ -112,17 +111,6 @@ export interface WorldOptions {
    * every setting, so a quiesced world is never unpersisted.
    */
   saveEvery?: 'barrier' | 'quiescence' | number;
-  /**
-   * Ask the adapter to fence every write (R57). With `true`, the engine calls
-   * `adapter.fence(worldId, step)` before each save and rejects the run with
-   * `FenceError` if another instance already owns that step — the guard against
-   * two workers resuming one snapshot and silently diverging.
-   *
-   * Off by default, and deliberately not implied by the adapter having a
-   * `fence` method: a time-travel world replays steps it has already written, so
-   * fencing it would refuse its own legitimate rewrites (R38).
-   */
-  fence?: boolean;
 }
 
 /** One pair executing right now, as reported by `world.runningPairs()` (R53). */
@@ -314,26 +302,6 @@ export interface World {
    */
   canLoad(snapshot: Snapshot): LoadCheck;
   /**
-   * Claims ownership of this world at its current step (R57) — the async step of
-   * the resume recipe, called once after `load`:
-   *
-   * ```ts
-   * world.load(snapshot)
-   * await world.claim()        // throws FenceError if another worker owns it
-   * await world.resume(entity, true)
-   * ```
-   *
-   * **This is what makes side effects exactly-once, and the save-time fence
-   * alone does not.** Fencing at save time stops the loser from persisting a
-   * divergent timeline, but by then its systems have already run — a duplicate
-   * refund has been issued, a record already deleted. Claiming before any step
-   * executes is what stops the loser from doing the work at all.
-   *
-   * Requires a `fence`-capable adapter; throws otherwise, rather than pretending
-   * to protect anything.
-   */
-  claim(): Promise<void>;
-  /**
    * The flight recorder's ring buffer of recent `StepTrace`s (R42) — last
    * 1000 steps by default, empty when created with `trace: false`. Render
    * with `formatTrace(steps)`.
@@ -516,7 +484,6 @@ class WorldImpl implements World {
   private readonly systemTimeoutMs: number | undefined;
   private readonly recipeVersion: number;
   private readonly saveEvery: 'barrier' | 'quiescence' | number;
-  private readonly fenced: boolean;
   /** Forward migration chain keyed by `from` version (R54). */
   private readonly migrations = new Map<number, { to: number; fn: Migration }>();
   /**
@@ -530,8 +497,6 @@ class WorldImpl implements World {
    */
   private revision = 0;
   private savedRevision = 0;
-  /** Step this world currently holds a fence claim for (R57), if any. */
-  private ownedStep: number | undefined;
   /** Aborted by `cancel()` during a run; every pair's `ctx.signal` follows it (R50/R51). */
   private runCancel: AbortController | undefined;
   /** Cancellation requested during the current run but not yet stamped (R50). */
@@ -566,7 +531,6 @@ class WorldImpl implements World {
     this.systemTimeoutMs = opts?.systemTimeoutMs;
     this.recipeVersion = opts?.recipeVersion ?? 0;
     this.saveEvery = opts?.saveEvery ?? 'barrier';
-    this.fenced = opts?.fence ?? false;
     const trace = opts?.trace;
     this.traceKeep =
       trace === false ? 0 : trace === true || trace === undefined ? 1000 : (trace.keep ?? 1000);
@@ -590,8 +554,8 @@ class WorldImpl implements World {
    * Records that committed state changed, so the next `persist()` writes (R58).
    *
    * EVERY path that mutates committed state must call this. Keying the save on a
-   * revision rather than the step number is what lets a cancellation boundary be
-   * persisted at all (it changes state without advancing the step) — but it also
+   * revision rather than the step number is what lets an idle cancellation be
+   * persisted (it changes state without advancing the step) — but it also
    * means a path that forgets to bump is silently never saved. Idle external
    * mutations and an idle `cancel()` were exactly that: an idle run wrote nothing
    * at all, and a cancelled world could resume un-cancelled.
@@ -601,11 +565,12 @@ class WorldImpl implements World {
   }
 
   /** Drops an opaque value kept by a non-strict load, once live code owns the name (R55). */
-  private forgetPreserved(entity: number, name: string): void {
+  private forgetPreserved(entity: number, name: string): boolean {
     const kept = this.preserved.get(entity);
-    if (kept === undefined || !(name in kept)) return;
+    if (kept === undefined || !Object.hasOwn(kept, name)) return false;
     delete kept[name];
     if (Object.keys(kept).length === 0) this.preserved.delete(entity);
+    return true;
   }
 
   // ------------------------------------------------------------- observers
@@ -684,7 +649,11 @@ class WorldImpl implements World {
       entityMap = new Map();
       this.dirt.set(systemKey, entityMap);
     }
-    if (!entityMap.has(entity)) entityMap.set(entity, reason);
+    if (!entityMap.has(entity)) {
+      entityMap.set(entity, reason);
+      // Pending pairs are snapshot state, including dirt created by world.use (R35/R58).
+      this.markChanged();
+    }
   }
 
   /**
@@ -931,8 +900,14 @@ class WorldImpl implements World {
     const comps = this.entities.get(id);
     if (!comps) throw new UnknownEntityError(id);
     const name = component.componentName;
-    this.forgetPreserved(id, name);
-    if (!comps.has(name)) return;
+    const removedOpaque = this.forgetPreserved(id, name);
+    if (!comps.has(name)) {
+      if (removedOpaque) {
+        this.markChanged();
+        this.notifyExternal({ kind: 'remove', entity: id, component: name });
+      }
+      return;
+    }
     comps.delete(name);
     this.refreshDirt([
       { record: { entity: id, component: name, kind: 'remove' }, writer: 'external' },
@@ -1193,9 +1168,7 @@ class WorldImpl implements World {
         // by step, so the boundary OVERWROTE the pre-cancel step-N snapshot and
         // made the uncancelled world unrecoverable by time travel; `step:applied`
         // advertised a step that never existed, which R45 calls the truthful
-        // label; and it left the save keyed on a revision while the fence was
-        // keyed on the step, so a fenced world refused its own boundary. A veto
-        // commits nothing, which is why that precedent does not apply here.
+        // label. A veto commits nothing, which is why that precedent does not apply here.
         this.stepCount += 1;
         this.markChanged();
         break;
@@ -1403,32 +1376,6 @@ class WorldImpl implements World {
 
   // ------------------------------------------------------------ persistence
 
-  async claim(): Promise<void> {
-    const adapter = this.persistence;
-    if (adapter?.fence === undefined) {
-      throw new LangECSError(
-        'world.claim() needs a persistence adapter implementing fence() (R57). ' +
-          'Without one there is nothing to arbitrate between two workers, and claiming would ' +
-          'give a false sense of exclusivity.',
-      );
-    }
-    // Staleness is checked BEFORE the fence, because the fence alone cannot catch
-    // it. A monotonic fence refuses a step at or below one already claimed — but a
-    // worker resuming an OLDER snapshot claims a LOWER step, and if it gets there
-    // first nothing has been claimed yet, so it is granted. It would then only be
-    // refused at its first save, by which time its side effects have run: exactly
-    // the failure `claim()` exists to prevent, one boundary further out.
-    //
-    // The adapter already knows the answer, and this costs one read per resume.
-    const latest = await adapter.load(this.id);
-    if (latest !== null && latest.step > this.stepCount) {
-      throw new StaleSnapshotError(this.stepCount, latest.step);
-    }
-    const granted = await adapter.fence(this.id, this.stepCount);
-    if (!granted) throw new FenceError(this.id, this.stepCount);
-    this.ownedStep = this.stepCount;
-  }
-
   /** Whether the configured cadence persists at this committed step (R58). */
   private shouldSaveAtStep(step: number): boolean {
     if (this.persistence === undefined) return false;
@@ -1440,38 +1387,12 @@ class WorldImpl implements World {
     return step % every === 0;
   }
 
-  /**
-   * Persists the current boundary, honouring the fence when enabled (R57).
-   *
-   * The fence is checked immediately before the write, not at load: that is the
-   * point where divergence would actually become durable, and it is already an
-   * async boundary the engine awaits. Losing the fence rejects the run — the
-   * world stops rather than keep writing history nobody will read.
-   *
-   * Skips entirely when nothing has been committed since the last save. That
-   * also removes a redundant write the engine always used to make (the final
-   * step was persisted at its barrier and again at run end); harmless against an
-   * idempotent adapter, but a monotonic fence would refuse the world's own second
-   * claim on the same step. Tracked by revision rather than step number, because
-   * a cancellation boundary (R50) changes state *without* advancing the step.
-   */
+  /** Saves each changed committed boundary once, at the configured cadence (R58). */
   private async persist(): Promise<void> {
     const adapter = this.persistence;
     if (adapter === undefined) return;
     if (this.revision === this.savedRevision) return;
     const snapshot = this.snapshot();
-    // Re-claiming a step this world already holds is skipped, not re-fenced.
-    // The fence is keyed on the STEP while the save is keyed on the REVISION, and
-    // those clocks disagree at any boundary that changes state without advancing
-    // the step — a cancellation, most obviously. Without this, cancelling a fenced
-    // world made it fence ITSELF out of its own step: the run rejected with
-    // `FenceError` naming a nonexistent rival, and the cancellation was never
-    // persisted, so the advice to "discard it and reload" resumed a live world.
-    if (this.fenced && adapter.fence !== undefined && snapshot.step !== this.ownedStep) {
-      const granted = await adapter.fence(this.id, snapshot.step);
-      if (!granted) throw new FenceError(this.id, snapshot.step);
-      this.ownedStep = snapshot.step;
-    }
     await adapter.save(snapshot);
     this.savedRevision = this.revision;
   }
@@ -1933,7 +1854,15 @@ class WorldImpl implements World {
               break;
             }
             const name = componentNameOf(op.component);
-            if (stagedLookup(op.entity, name).present) stageDelete(op.entity, name, pair);
+            const opaque = this.preserved.get(op.entity);
+            const untouchedOpaque =
+              !overlay.get(op.entity)?.has(name) &&
+              opaque !== undefined &&
+              Object.hasOwn(opaque, name);
+            if (stagedLookup(op.entity, name).present || untouchedOpaque) {
+              // Evict opaque data only during commit, never during staging (R25/R55).
+              stageDelete(op.entity, name, pair);
+            }
             break;
           }
           case 'spawn': {
@@ -2369,9 +2298,7 @@ class WorldImpl implements World {
       }
       this.matched.set(sys.key, matchSet);
     }
-    // A just-loaded boundary came FROM storage, so it needs no write of its own;
-    // marking it saved keeps a fenced resume from immediately re-claiming the
-    // step it just read (R57).
+    // A just-loaded boundary needs no write until state or pending dirt changes.
     this.markChanged();
     this.savedRevision = this.revision;
     this.notifyExternal({ kind: 'load' });

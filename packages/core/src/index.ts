@@ -35,7 +35,6 @@ export {
   DuplicateComponentError,
   DuplicateMigrationError,
   DuplicateSystemError,
-  FenceError,
   LangECSError,
   MissingResourceError,
   RecipeVersionError,
@@ -55,7 +54,6 @@ export {
 export {
   defineEvent,
   type EventRef,
-  isEventRef,
 } from './event';
 export type {
   ChangeRecord,
@@ -65,7 +63,6 @@ export type {
   RunResult,
   RunStatus,
 } from './events';
-export { hashRequest, requestKey } from './hash';
 // Model middleware (R61): retry/timeout/fallback/rate-limit/cost/cache, composed
 // at the resource-registration site and entirely outside engine semantics.
 export {

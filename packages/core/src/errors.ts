@@ -160,30 +160,6 @@ export class StaleSnapshotError extends LangECSError {
   }
 }
 
-/**
- * Thrown when the persistence adapter refuses a write because another world
- * instance owns this world id at or beyond that step (R57).
- *
- * This is the silent-divergence guard: two workers resuming the same snapshot —
- * a double-click, two tabs, a queue retry after a timeout — would otherwise both
- * run happily, and one of them would be writing history nobody reads.
- */
-export class FenceError extends LangECSError {
-  readonly worldId: string;
-  readonly step: number;
-
-  constructor(worldId: string, step: number) {
-    super(
-      `Fenced out of world "${worldId}" at step ${step}: another instance has already claimed this ` +
-        `step or a later one. This world lost the race and has stopped rather than diverge (R57). ` +
-        `Its in-memory state is now ahead of what was persisted — discard it and reload.`,
-    );
-    this.name = 'FenceError';
-    this.worldId = worldId;
-    this.step = step;
-  }
-}
-
 /** Thrown when a component's `deserialize` hook fails while loading a snapshot (R36). */
 export class DeserializeError extends LangECSError {
   readonly entity: number;
