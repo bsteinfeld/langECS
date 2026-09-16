@@ -149,7 +149,7 @@ importers:
         version: link:../core
 
   packages/stdlib:
-    dependencies:
+    devDependencies:
       '@langecs/core':
         specifier: workspace:*
         version: link:../core

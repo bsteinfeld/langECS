@@ -1,8 +1,14 @@
 # Releasing
 
-All seven `packages/*` ship together under one version. They depend on each other with
-`workspace:*`, which pnpm rewrites to an exact version at publish time, so a mixed set of
-versions could not express "these were built together" anyway.
+All seven `packages/*` ship together under one version as one tested release. Satellites
+declare core as a `workspace:^` peer, which publishes as a caret range. For a 0.2.0
+release that accepts core 0.2.x; upgrade the related packages together across 0.x minor
+versions. The workspace also uses `workspace:*` dev dependencies for local builds.
+
+After building, `pnpm check:packaging` checks every packed manifest and installs an
+isolated consumer with a newer core patch version. It verifies shared component identity
+and a snapshot round-trip without changing the working manifests or publishing anything.
+The check needs `npm` and `tar`; its consumer install is offline and disables scripts.
 
 | | |
 |---|---|

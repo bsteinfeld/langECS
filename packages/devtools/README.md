@@ -35,6 +35,11 @@ npm i -D @langecs/devtools
 
 A development dependency: it starts a local web server and is not meant to ship to production.
 
+Your application must also declare a compatible `@langecs/core`; devtools shares that
+instance through its peer dependency. Install core explicitly, including with package
+managers that do not install peers automatically. Upgrade related `@langecs` packages
+together across 0.x minor versions.
+
 ESM only, Node >= 20.
 
 ## Options
