@@ -21,6 +21,7 @@
 import { abortReason, delay, throwIfAborted } from './cancel';
 import { requestKey } from './hash';
 import type { Model, ModelRequest, ModelResult } from './model';
+import { copyModelResult } from './model-result';
 
 /** One layer of model middleware (R61): takes a `Model`, returns a `Model`. */
 export type ModelMiddleware = (model: Model) => Model;
@@ -32,11 +33,11 @@ export type ModelMiddleware = (model: Model) => Model;
  *
  * ```ts
  * wrapModel(base, withRetry({ max: 3 }), withCost(ledger))
- * // retry sees every attempt; cost sees only the one that succeeded
+ * // retry sees every attempt; cost reports only successful results
  * ```
  *
- * Swap the order and cost would count each retried attempt — which is sometimes
- * what you want, and is why the order is yours to choose rather than fixed.
+ * Swapping these layers changes the measured duration: an outer cost layer
+ * includes retry backoff. Failed attempts have no successful usage to report.
  *
  * One ordering trap is worth knowing before you hit it: a layer listed **after**
  * `withFallback` wraps only the primary model, because a fallback is invoked
@@ -345,10 +346,11 @@ export function withRateLimit(opts: RateLimitOptions): ModelMiddleware {
   const waiting: (() => void)[] = [];
 
   const release = (): void => {
-    active -= 1;
-    // Hands the freed slot to the next waiter. Every acquired slot MUST come
-    // back through here, or the queue behind it never moves.
-    waiting.shift()?.();
+    const next = waiting.shift();
+    // Transfer the occupied permit before resolving the waiter. A newcomer must
+    // not see a free slot while that waiter is still awaiting its microtask.
+    if (next !== undefined) next();
+    else active -= 1;
   };
 
   /**
@@ -379,7 +381,7 @@ export function withRateLimit(opts: RateLimitOptions): ModelMiddleware {
     const gate = async <R>(req: ModelRequest, call: () => Promise<R>): Promise<R> => {
       throwIfAborted(req.signal);
       if (active >= concurrency) await waitTurn(req.signal);
-      active += 1;
+      else active += 1;
       try {
         // Checked INSIDE the try, so an abort here still runs `release()`. With
         // the check outside it, a waiter that aborted between being handed a slot
@@ -497,13 +499,14 @@ export interface CacheOptions {
 /**
  * Serves repeated identical requests from memory (R61).
  *
- * Keyed on a stable hash of the request with `signal` excluded — including it
+ * Keyed on the canonical request with `signal` excluded — including it
  * would make every call unique and the cache useless. A cached `stream` replays
  * the whole text as a single chunk: honest about the fact that nothing is
  * actually streaming, and it keeps token-forwarding consumers working.
  *
  * Only successes are cached. Caching a failure would turn one provider blip into
- * a permanently poisoned answer.
+ * a permanently poisoned answer. Cache entries omit provider `raw` and detach
+ * message/usage data; a result that cannot be serialized bypasses the cache.
  */
 export function withCache(opts?: CacheOptions): ModelMiddleware {
   const store = opts?.store ?? new Map<string, ModelResult>();
@@ -530,13 +533,26 @@ export function withCache(opts?: CacheOptions): ModelMiddleware {
     // .message])`, so the cached `Msg` becomes committed component state, aliased
     // by every entity that ever got this answer. `replayModel` detaches for
     // exactly this reason; the cache needs it more.
-    return JSON.parse(JSON.stringify(hit)) as ModelResult;
+    try {
+      return copyModelResult(hit);
+    } catch {
+      store.delete(key);
+      stamps.delete(key);
+      return undefined;
+    }
   };
   const write = (key: string, result: ModelResult): void => {
     // Stored detached as well as read detached: the miss path returns the model's
     // own object to the caller, so storing that same reference let the FIRST
     // consumer poison every later hit.
-    store.set(key, JSON.parse(JSON.stringify(result)) as ModelResult);
+    let detached: ModelResult;
+    try {
+      detached = copyModelResult(result);
+    } catch {
+      // Caching is optional: an uncacheable result must still reach its caller.
+      return;
+    }
+    store.set(key, detached);
     stamps.set(key, now());
     if (maxEntries !== undefined && store.size > maxEntries) {
       const oldest = store.keys().next();

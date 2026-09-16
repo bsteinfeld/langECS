@@ -105,7 +105,7 @@ export interface SystemCtx {
    * ctx.emit(Token, { text: 'hi' })
    * ```
    */
-  emit<T>(event: EventRef<T>, payload: T): void;
+  emit<T>(event: EventRef<T>, payload: NoInfer<T>): void;
   emit(data: unknown): void;
   /**
    * Typed resource lookup via a `ResourceRef` (R18 amended): `T` comes from

@@ -1,3 +1,5 @@
+import { isEventRef } from '../src/event';
+import { hashRequest, requestKey } from '../src/hash';
 // Standard reducers (R59), typed events (R60), model middleware (R61) and
 // record/replay (R62). Zero network throughout.
 
@@ -12,8 +14,6 @@ import {
   defineSystem,
   delay,
   formatRecording,
-  hashRequest,
-  isEventRef,
   type Model,
   type ModelRequest,
   maxByReducer,
@@ -23,7 +23,6 @@ import {
   type RunEvent,
   recordingModel,
   replayModel,
-  requestKey,
   scriptedModel,
   sumReducer,
   withCache,
@@ -49,7 +48,7 @@ test('R59 the standard reducers merge as documented, without mutating their inpu
   const score = maxByReducer<{ n: number }>((v) => v.n);
   expect(score({ n: 1 }, { n: 5 })).toEqual({ n: 5 });
   expect(score({ n: 5 }, { n: 1 })).toEqual({ n: 5 });
-  // A tie keeps `current`, so the outcome cannot depend on barrier ordering.
+  // A tie keeps the earliest value in deterministic barrier order.
   expect(score({ n: 5 }, { n: 5 })).toEqual({ n: 5 });
 
   const dedupe = dedupeByReducer<{ id: string }>((v) => v.id);

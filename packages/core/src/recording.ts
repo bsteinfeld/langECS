@@ -9,14 +9,16 @@
 // incident becomes a regression test, a prompt refactor becomes verifiable, and a
 // contributor with no API key can run a realistic suite.
 
+import { throwIfAborted } from './cancel';
 import { hashRequest } from './hash';
 import type { Model, ModelRequest, ModelResult, Msg } from './model';
+import { copyModelResult } from './model-result';
 
 /** One captured call (R62). Plain JSON, so a recording is a checkable fixture. */
 export interface RecordingEntry {
   /** Stable hash of the request minus `signal` — the primary match key. */
   hash: string;
-  /** Call ordinal within the recording, 0-based — the fallback match key. */
+  /** Invocation ordinal, 0-based; failed/uncapturable calls may leave gaps. */
   index: number;
   /** The request as sent, minus `signal`. Kept for readable diffs, not for matching. */
   request: Omit<ModelRequest, 'signal'>;
@@ -56,74 +58,67 @@ export function recordingModel(
   sink?: (entry: RecordingEntry) => void,
 ): RecordingModel {
   const entries: RecordingEntry[] = [];
+  let nextIndex = 0;
   const snapshot = (): Recording =>
-    JSON.parse(JSON.stringify({ version: 1, entries })) as Recording;
-
-  const capture = (req: ModelRequest, result: ModelResult, via: 'generate' | 'stream'): void => {
-    const { signal: _signal, ...request } = req;
-    entries.push({
-      hash: hashRequest(req),
-      index: entries.length,
-      // Detached, so a later mutation of the live request cannot rewrite history.
-      request: JSON.parse(JSON.stringify(request)) as Omit<ModelRequest, 'signal'>,
-      // `raw` is provider-specific and often circular; drop it so a recording
-      // stays JSON and stays diffable.
-      result: { message: result.message, ...usageOf(result) },
-      via,
-    });
-    // Recording is observation, so it must never fail a call that succeeded
-    // (the principle R45 already applies to observers). `hashRequest` can throw
-    // on an exotic request, and it runs on the SUCCESS path.
-    const entry = entries[entries.length - 1];
+    JSON.parse(
+      JSON.stringify({ version: 1, entries: [...entries].sort((a, b) => a.index - b.index) }),
+    ) as Recording;
+  type PendingEntry = Omit<RecordingEntry, 'result'>;
+  const reportFailure = (err: unknown): void => {
+    (globalThis as { console?: { error?: (...a: unknown[]) => void } }).console?.error?.(
+      '[langecs] recordingModel could not capture a call (ignored):',
+      err,
+    );
+  };
+  // Invocation order and request data must be fixed BEFORE awaiting the model.
+  // Concurrent identical prompts can complete in the opposite order (R29/R62).
+  const prepare = (req: ModelRequest, via: 'generate' | 'stream'): PendingEntry | undefined => {
+    const index = nextIndex++;
     try {
-      if (entry !== undefined) sink?.(entry);
+      const { signal: _signal, ...request } = req;
+      return {
+        index,
+        via,
+        hash: hashRequest(req),
+        request: JSON.parse(JSON.stringify(request)) as Omit<ModelRequest, 'signal'>,
+      };
     } catch (err) {
-      (globalThis as { console?: { error?: (...a: unknown[]) => void } }).console?.error?.(
-        '[langecs] recordingModel sink threw (ignored):',
-        err,
-      );
+      reportFailure(err);
+      return undefined;
     }
   };
-
-  /** Capturing must never turn a successful model call into a failure. */
-  const safeCapture = (
-    req: ModelRequest,
-    result: ModelResult,
-    via: 'generate' | 'stream',
-  ): void => {
+  const capture = (pending: PendingEntry | undefined, result: ModelResult): void => {
+    if (pending === undefined) return;
     try {
-      capture(req, result, via);
+      const entry: RecordingEntry = { ...pending, result: copyModelResult(result) };
+      entries.push(entry);
+      // Sinks receive their own copy; neither a sink nor the live caller can
+      // rewrite captured history through a shared message/usage object.
+      if (sink !== undefined) sink(JSON.parse(JSON.stringify(entry)) as RecordingEntry);
     } catch (err) {
-      (globalThis as { console?: { error?: (...a: unknown[]) => void } }).console?.error?.(
-        '[langecs] recordingModel could not capture a call (ignored):',
-        err,
-      );
+      // Capture and observation must never fail a successful provider call.
+      reportFailure(err);
     }
   };
 
   const out: RecordingModel = {
     recording: snapshot,
     async generate(req) {
+      const pending = prepare(req, 'generate');
       const result = await model.generate(req);
-      safeCapture(req, result, 'generate');
+      capture(pending, result);
       return result;
     },
   };
   if (model.stream !== undefined) {
     const streamFn = model.stream.bind(model);
     out.stream = async (req, onChunk) => {
+      const pending = prepare(req, 'stream');
       const result = await streamFn(req, onChunk);
-      safeCapture(req, result, 'stream');
+      capture(pending, result);
       return result;
     };
   }
-  return out;
-}
-
-function usageOf(result: ModelResult): Partial<ModelResult> {
-  const out: Partial<ModelResult> = {};
-  if (result.usage !== undefined) out.usage = result.usage;
-  if (result.finishReason !== undefined) out.finishReason = result.finishReason;
   return out;
 }
 
@@ -185,6 +180,7 @@ export function replayModel(recording: Recording, opts?: ReplayOptions): Model {
   const window = Math.max(1, Math.floor(opts?.window ?? 16));
 
   const take = (req: ModelRequest): RecordingEntry => {
+    throwIfAborted(req.signal);
     const hash = hashRequest(req);
     let cursor = 0;
     while (cursor < consumed.length && consumed[cursor] === true) cursor += 1;
@@ -246,7 +242,11 @@ export function replayModel(recording: Recording, opts?: ReplayOptions): Model {
       // preserve them.
       const text = entry.result.message.content;
       const size = Math.max(1, Math.ceil(text.length / 4));
-      for (let at = 0; at < text.length; at += size) onChunk({ text: text.slice(at, at + size) });
+      for (let at = 0; at < text.length; at += size) {
+        throwIfAborted(req.signal);
+        onChunk({ text: text.slice(at, at + size) });
+      }
+      throwIfAborted(req.signal);
       return replayResult(entry);
     };
   }

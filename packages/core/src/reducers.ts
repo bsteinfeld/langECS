@@ -89,8 +89,8 @@ export function mergeReducer<T extends object>(): Reducer<T> {
  * Keeps whichever write scores highest (R59) — "best result wins" fan-in, e.g.
  * the highest-confidence extraction among several models.
  *
- * Ties keep `current`, so the result does not depend on barrier ordering among
- * equal scores.
+ * Ties keep `current`: the earliest equal-scoring value in deterministic barrier
+ * order wins. Changing that order can change which equal-scoring value survives.
  */
 export function maxByReducer<T>(score: (value: T) => number): Reducer<T> {
   return (current, incoming) => (score(incoming) > score(current) ? incoming : current);
