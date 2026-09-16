@@ -628,6 +628,7 @@ test('allowedHosts admits a name the bind address does not carry, and nothing el
 
   expect(await upgrades('http://dev-box:4477')).toBe(true);
   expect(await upgrades('https://dev-box.tailnet.ts.net')).toBe(true);
+  expect(await upgrades('http://[::1]:5173')).toBe(true);
   // Still an allowlist: a listed name does not open the door to anything else,
   // and a suffix that merely ends in one is a different host.
   expect(await upgrades('https://evil.example')).toBe(false);

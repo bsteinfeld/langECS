@@ -142,11 +142,11 @@ function originAllowed(
   } catch {
     return false;
   }
-  const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
   // IPv6 origins arrive bracketed (`http://[::1]:4477`); URL.hostname keeps the
   // brackets, so compare the unbracketed form against the configured names too.
   const bare =
     hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  const loopback = bare === 'localhost' || bare === '127.0.0.1' || bare === '::1';
   return (
     loopback ||
     hostname === boundHost ||
