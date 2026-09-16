@@ -72,6 +72,7 @@ try {
   run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--strict-peer-deps', '--cache', join(scratch, 'npm-cache')], consumer);
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
+    import { cpSync } from 'node:fs';
     import { createWorld, getComponentByName } from '@langecs/core';
     import { Messages } from '@langecs/stdlib';
     assert.equal(getComponentByName(Messages.componentName), Messages);
@@ -80,8 +81,20 @@ try {
     const restored = createWorld();
     restored.load(world.snapshot());
     assert.deepEqual(restored.snapshot(), world.snapshot());
+    // Reloading the same physical source is supported; a second installed copy
+    // must still fail with the two distinct source locations in its diagnostic.
+    const source = import.meta.resolve('@langecs/core');
+    const reloaded = await import(source + '?reload=1#test');
+    assert.equal(typeof reloaded.createWorld, 'function');
+    cpSync('node_modules/@langecs/core', 'second-core', { recursive: true });
+    await assert.rejects(import('./second-core/dist/index.js'), (error) => {
+      assert.match(error.message, /Multiple @langecs\\/core instances/);
+      assert.ok(error.message.includes('/node_modules/@langecs/core/dist/index.js'));
+      assert.ok(error.message.includes('/second-core/dist/index.js'));
+      return true;
+    });
   `], consumer);
-  console.log(`Packed consumer shares core ${coreManifest.version}; snapshot round-trip passed.`);
+  console.log(`Packed consumer shares core ${coreManifest.version}; snapshot, reload, and duplicate-copy checks passed.`);
 } catch (error) {
   console.error(error.stderr?.toString() || error.message);
   process.exitCode = 1;

@@ -10,24 +10,15 @@ test('R7 application duplicates cannot substitute a reducer or change tag intros
   expect(listComponents().find((c) => c.name === name)?.tag).toBe(false);
 });
 
-test('R7 a second core evaluation fails with both module URLs before definitions can alias', async () => {
-  const firstUrl = (import.meta as { url: string }).url.replace(
-    'test/registry-interop.test.ts',
-    'src/component.ts',
-  );
-  defineComponent<number>({ name: 'interop.BeforeDuplicate' });
+test('R7 a module reset starts a fresh registry without a duplicate-install diagnostic', async () => {
+  const old = defineComponent<number>({ name: 'interop.BeforeReload' });
   vi.resetModules();
-  await expect(import('../src/component')).rejects.toThrow(/Multiple @langecs\/core instances/);
-  // The failed import does not replace the first instance or mutate its registry.
-  expect(getComponentByName('interop.BeforeDuplicate')?.componentName).toBe(
-    'interop.BeforeDuplicate',
-  );
-  try {
-    await import('../src/component');
-  } catch (error) {
-    expect(String(error)).toContain(firstUrl);
-    expect(String(error)).toContain('First module:');
-    expect(String(error)).toContain('Second module:');
-    expect(String(error)).toContain('peer dependencies');
-  }
+  const reloaded = await import('../src/index');
+  expect(typeof reloaded.createWorld).toBe('function');
+  expect(reloaded.getComponentByName('interop.BeforeReload')).toBeUndefined();
+  const fresh = reloaded.defineComponent<number>({ name: 'interop.BeforeReload' });
+  expect(fresh).not.toBe(old);
+  expect(getComponentByName('interop.BeforeReload')).toBe(old);
+  expect(reloaded.getComponentByName('interop.BeforeReload')).toBe(fresh);
+  expect(() => reloaded.defineTag('interop.BeforeReload')).toThrow();
 });

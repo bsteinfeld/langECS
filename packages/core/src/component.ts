@@ -5,9 +5,17 @@ import { DuplicateComponentError, LangECSError } from './errors';
 // This slot is diagnostic metadata only and works in any JavaScript realm (R1).
 const INSTANCE_KEY = Symbol.for('langecs.coreInstance.v1');
 const instanceSlots = globalThis as unknown as Record<symbol, unknown>;
-const moduleUrl = (import.meta as { url?: string }).url ?? '(module URL unavailable)';
+const moduleUrl = (import.meta as { url?: string }).url;
 const previousInstance = instanceSlots[INSTANCE_KEY] as { url: string } | undefined;
-if (previousInstance !== undefined) {
+// Test module resets and HMR can evaluate the same source again. A reload owns a
+// fresh local registry; it is not evidence of a second installed copy. Query and
+// fragment suffixes are commonly used to invalidate an otherwise identical URL.
+const sourcePath = (url: string): string => url.replace(/[?#].*$/, '');
+if (
+  moduleUrl !== undefined &&
+  previousInstance !== undefined &&
+  sourcePath(previousInstance.url) !== sourcePath(moduleUrl)
+) {
   throw new LangECSError(
     'Multiple @langecs/core instances in one JavaScript realm. ' +
       `First module: ${previousInstance.url}. Second module: ${moduleUrl}. ` +
@@ -15,7 +23,9 @@ if (previousInstance !== undefined) {
       'and configure your bundler to deduplicate @langecs/core.',
   );
 }
-instanceSlots[INSTANCE_KEY] = { url: moduleUrl };
+// Some bundlers omit import.meta.url. Without a source location there is no
+// reliable duplicate-install diagnostic; don't reject an unknown location.
+if (moduleUrl !== undefined) instanceSlots[INSTANCE_KEY] = { url: moduleUrl };
 
 /**
  * A pending (component, value) pair produced by calling a `ComponentType`.
