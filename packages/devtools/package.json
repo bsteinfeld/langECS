@@ -45,10 +45,13 @@
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit"
   },
   "dependencies": {
-    "@langecs/core": "workspace:*",
     "ws": "^8.21.0"
   },
+  "peerDependencies": {
+    "@langecs/core": "workspace:^"
+  },
   "devDependencies": {
+    "@langecs/core": "workspace:*",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",

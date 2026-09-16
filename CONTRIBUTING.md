@@ -108,6 +108,14 @@ amending.
 - **Core stays zero-dependency and isomorphic** (SPEC R1). No runtime deps, no `node:*`
   imports, no Node-only globals in `packages/core`. Package boundaries enforce the
   architecture — don't weaken them.
+- **Core is a peer dependency of the other packages, never a regular one.** Component
+  identity and the component registry live in `packages/core`, so it has to be a
+  singleton in the consumer's tree. Declaring it under `dependencies` with `workspace:*`
+  publishes an exact version pin, and the first time a consumer's core version differs
+  from the one a package pins, npm nests a second copy — two registries, and
+  `world.load` throws `UnknownComponentError` on names that are genuinely defined.
+  Declare it as `workspace:^` under `peerDependencies`, with `workspace:*` under
+  `devDependencies` so the workspace still links it for build and test.
 - **Components hold only serializable data** (SPEC R3). Anything with functions — tool
   implementations, model clients, DB connections — registers on the world as a **named
   resource** (`world.register('tool:sql', impl)`) and is referenced from components by

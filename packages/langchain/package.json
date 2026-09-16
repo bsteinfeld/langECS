@@ -41,13 +41,12 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@langecs/core": "workspace:*"
-  },
   "peerDependencies": {
+    "@langecs/core": "workspace:^",
     "@langchain/core": ">=0.3"
   },
   "devDependencies": {
+    "@langecs/core": "workspace:*",
     "@langchain/core": "^1.1.48"
   },
   "publishConfig": {

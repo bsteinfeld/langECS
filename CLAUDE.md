@@ -32,6 +32,12 @@ directly — no build step needed for dev.
 
 - **`@langecs/core` has zero runtime dependencies and is isomorphic** — no `node:*`
   imports, no Node-only globals (R1).
+- **`@langecs/core` is a `peerDependency` of every other package, never a regular
+  dependency.** Two copies of core in one tree means two component registries, and a
+  snapshot written by one cannot resolve the other's names (`UnknownComponentError`,
+  R36). `workspace:*` in `dependencies` publishes as an *exact* pin, which nests a second
+  core the moment versions skew — that is a real reproduced failure, not a theoretical
+  one. Use `workspace:^` in `peerDependencies` plus `workspace:*` in `devDependencies`.
 - **Components are data-only** (JSON/structured-clone serializable, R3). Behavior (tools,
   model clients, DB handles) lives in named world registries; components reference it by
   name (`world.register('model:main', …)` + `ModelRef('model:main')`).
