@@ -50,6 +50,14 @@ name with the resource's type attached, interchangeable with the plain string.
 
 ---
 
+## Install
+
+```sh
+npm i @langecs/stdlib @langecs/core
+```
+
+ESM only, Node >= 20.
+
 ## Components
 
 All values are plain JSON data (core R3).

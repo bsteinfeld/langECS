@@ -4,6 +4,18 @@
 the "Lang—" prefix risks LangChain brand confusion and must be renamed before any
 public release.*
 
+> **Decision (2026-09-16): keep `langecs`.** This pass ran to completion and produced a
+> good shortlist; the call went the other way. At 0.x the rename's cost — the `@langecs`
+> scope, every import in six ported examples, SPEC/DESIGN cross-references, and the
+> repo name itself — outweighed a confusion risk that a line in the README defuses
+> ("not affiliated with LangChain"). The `lang` prefix also does honest work here: the
+> project is defined by porting LangGraph.js semantics, and readers arriving from that
+> world are the intended audience.
+>
+> The research below stands as-is, unedited, for whenever this is revisited — a 1.0 with
+> a broader audience is the obvious moment. `alveary` and `worldling` were both free at
+> the time of writing and neither is reserved, so re-verify before acting on them.
+
 ## Methodology
 
 1. **Brainstorm** (~40 raw candidates, ~25 carried forward) around two semantic fields:

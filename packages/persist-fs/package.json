@@ -9,11 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/langecs/langecs.git",
+    "url": "git+https://github.com/bsteinfeld/langECS.git",
     "directory": "packages/persist-fs"
   },
-  "bugs": "https://github.com/langecs/langecs/issues",
-  "homepage": "https://github.com/langecs/langecs/tree/main/packages/persist-fs#readme",
+  "bugs": "https://github.com/bsteinfeld/langECS/issues",
+  "homepage": "https://github.com/bsteinfeld/langECS/tree/main/packages/persist-fs#readme",
   "keywords": [
     "llm",
     "agents",
@@ -32,10 +32,13 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -44,6 +47,9 @@
     "@langecs/core": "workspace:*"
   },
   "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",

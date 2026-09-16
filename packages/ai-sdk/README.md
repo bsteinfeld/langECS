@@ -5,7 +5,15 @@ language model as a core [`Model`](../core/README.md#model-contracts) — one de
 every provider (OpenAI, Anthropic, Google, Ollama, …), tool calling, and streaming
 included. This is the adapter the [examples](../../examples/README.md) use.
 
-Peer dependency: `ai` (>= 5; developed and tested against v6).
+## Install
+
+```sh
+npm i @langecs/ai-sdk @langecs/core ai
+```
+
+`ai` is a peer dependency (>= 5; developed and tested against v6).
+
+ESM only, Node >= 20.
 
 ## `fromAiSdk(model: LanguageModel): Model`
 

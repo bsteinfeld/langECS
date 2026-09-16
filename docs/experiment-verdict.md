@@ -67,7 +67,11 @@ honestly. Recommendation: **publish — after three gates**, in priority order:
 > [debugging guide](guides/debugging-systems.md) and forward introspection
 > (`world.systemsMatching`, `world.queryStats`) make the emergent control flow
 > legible; the [`@langecs/devtools`](../packages/devtools) inspector is the
-> interactive complement. Gate 1 (rename) remains the maintainer's call.
+> interactive complement. Gate 1 (rename) is closed: the pass ran
+> ([naming.md](naming.md)) and the maintainer kept `langecs`, disclaiming the
+> LangChain association in the README rather than paying the rename's cost at
+> 0.x. All three gates are settled, and the packages publish to npm under
+> `@langecs/*` ([RELEASING.md](../RELEASING.md)).
 
 The six comparison READMEs concede real losses by name and should ship as-is — the
 honesty is the credibility. The final publish/no-publish call is the maintainer's.

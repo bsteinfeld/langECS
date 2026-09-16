@@ -6,6 +6,14 @@ survives process death: kill it mid-conversation, start a new process, load, res
 Node-only (uses `node:fs`); for in-memory history and time travel without disk, core's
 `MemoryAdapter` has the same surface.
 
+## Install
+
+```sh
+npm i @langecs/persist-fs @langecs/core
+```
+
+ESM only, Node >= 20.
+
 ## `fsAdapter(options): FsAdapter`
 
 ```ts

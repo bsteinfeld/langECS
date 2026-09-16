@@ -21,12 +21,18 @@ more tooling. For the mental model behind every line, read
 
 ## Install
 
-The packages are not published to npm yet — you work inside this repo, a pnpm
-workspace. You need **Node ≥ 20** and **pnpm 11** (the repo pins
-`packageManager: pnpm@11.1.0`, so `corepack enable` is the easy path):
+Into your own project — ESM only, Node ≥ 20:
 
 ```sh
-git clone <this repo> && cd langecs
+npm i @langecs/core @langecs/stdlib @langecs/ai-sdk ai @ai-sdk/openai
+```
+
+Or work inside this repo, a pnpm workspace, which is what the walkthrough below
+assumes. You need **Node ≥ 20** and **pnpm 11** (the repo pins
+`packageManager: pnpm@11.27.0`, so `corepack enable` is the easy path):
+
+```sh
+git clone https://github.com/bsteinfeld/langECS && cd langECS
 corepack enable
 pnpm install
 ```

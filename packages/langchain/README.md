@@ -5,7 +5,15 @@ LangChain.js model adapter for LangECS: wrap any LangChain chat model
 message classes stay at the adapter boundary — inside the world, conversation history
 is plain-JSON `Msg[]` components, snapshot-safe by construction.
 
-Peer dependency: `@langchain/core` (>= 0.3; developed and tested against v1).
+## Install
+
+```sh
+npm i @langecs/langchain @langecs/core @langchain/core
+```
+
+`@langchain/core` is a peer dependency (>= 0.3; developed and tested against v1).
+
+ESM only, Node >= 20.
 
 ## `fromLangChain(chatModel: BaseChatModel): Model`
 
