@@ -9,11 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/langecs/langecs.git",
+    "url": "git+https://github.com/bsteinfeld/langECS.git",
     "directory": "packages/otel"
   },
-  "bugs": "https://github.com/langecs/langecs/issues",
-  "homepage": "https://github.com/langecs/langecs/tree/main/packages/otel#readme",
+  "bugs": "https://github.com/bsteinfeld/langECS/issues",
+  "homepage": "https://github.com/bsteinfeld/langECS/tree/main/packages/otel#readme",
   "keywords": [
     "llm",
     "agents",
@@ -32,10 +32,13 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -53,6 +56,9 @@
     "@opentelemetry/sdk-trace-base": "^2.8.0"
   },
   "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",

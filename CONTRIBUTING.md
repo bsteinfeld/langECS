@@ -8,7 +8,7 @@ design documents (see [Where design truth lives](#where-design-truth-lives)).
 
 - **Node >= 20** (per `engines` in every `package.json`). The **sql-agent example needs
   Node >= 22.5** because it uses the built-in `node:sqlite` module (added in Node 22.5.0).
-- **pnpm 11** — the repo pins `pnpm@11.1.0` via the `packageManager` field, so the easiest
+- **pnpm 11** — the repo pins `pnpm@11.27.0` via the `packageManager` field, so the easiest
   path is corepack:
 
   ```sh
@@ -72,6 +72,12 @@ repo-root `.env.local`** (loaded by `examples/_shared/env.ts`; no dotenv depende
 from `@langecs/core`, and unit tests across the repo are deterministic. The one
 exception-shaped thing is the `ai-sdk` integration test, which is skipped automatically
 when `OPENAI_API_KEY` is absent (`describe.skipIf`).
+
+## Releasing
+
+Publishing to npm is documented in [RELEASING.md](RELEASING.md): all seven `packages/*`
+ship in lockstep, `pnpm version:all <version>` cuts the tag, and pushing that tag is what
+publishes. You do not need any of this to contribute — it is the maintainer's path.
 
 ## Monorepo map
 

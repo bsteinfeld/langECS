@@ -27,6 +27,16 @@ Mutations go through the engine's public external-mutation API and are
 instead of corrupting a step. Nothing in the devtools bypasses engine
 invariants.
 
+## Install
+
+```sh
+npm i -D @langecs/devtools
+```
+
+A development dependency: it starts a local web server and is not meant to ship to production.
+
+ESM only, Node >= 20.
+
 ## Options
 
 ```ts

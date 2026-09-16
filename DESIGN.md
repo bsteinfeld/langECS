@@ -353,8 +353,12 @@ langecs/
 ```
 
 Package boundaries enforce the architecture (core's zero-dep claim is structural, not
-vigilance). **Naming:** `langecs` is a working title; the "Lang—" prefix risks
-LangChain brand confusion — do a rename pass before any public release.
+vigilance). **Naming:** `langecs` was a working title, flagged here because the
+"Lang—" prefix risks LangChain brand confusion. The rename pass ran
+(docs/naming.md) and the outcome was to keep `langecs`: the confusion risk is
+real but bounded by a README disclaimer, and the cost of retraining every
+reference — docs, six ported examples, the `@langecs` scope itself — outweighed
+it for a 0.x experiment. Revisit if the project outgrows that framing.
 
 ---
 

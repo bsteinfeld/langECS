@@ -4,6 +4,16 @@ OpenTelemetry instrumentation for [LangECS](../../README.md): run/step/system sp
 engine's observer surface (SPEC §14), GenAI semantic-convention spans for models and tools, and
 engine metrics.
 
+## Install
+
+```sh
+npm i @langecs/otel @langecs/core @opentelemetry/api
+```
+
+`@opentelemetry/api` is a peer dependency — this package never pulls in an SDK of its own.
+
+ESM only, Node >= 20.
+
 ## Layering: API-only
 
 This is an OpenTelemetry **instrumentation library**. Its only runtime dependency is

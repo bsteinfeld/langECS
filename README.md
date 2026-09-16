@@ -4,7 +4,7 @@
 
 Agents are entities. All agent state — message history, pending tool calls, errors, interrupts — is components (pure JSON data). Logic is systems: queries over components plus an async handler. There are no edges and no router; a system fires when another system's writes dirty the components its query watches, and a run ends when nothing fires (quiescence). One sentence of positioning: **LangGraph is Pregel over a closed graph; LangECS is Pregel over an open world.**
 
-> **Status: v0.1, an experiment — verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side and judging honestly (each port's [README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable, packages are not on npm, and the name `langecs` is provisional — a rename is planned before any release ([docs/naming.md](docs/naming.md)).
+> **Status: v0.1, an experiment — verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side and judging honestly (each port's [README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable and 0.x versioning means minor bumps can break you. The name `langecs` was reviewed for a rename and kept ([docs/naming.md](docs/naming.md) records the candidates and the reasoning); it is not affiliated with LangChain.
 
 "Agents as ECS entities" is not a new idea — [ArgOS](https://github.com/project-89/argOS) and DeepMind's [Simulation Streams](https://arxiv.org/abs/2501.18668) got there first, on the simulation side. What LangECS adds is the runtime:
 
@@ -28,10 +28,16 @@ Components hold only serializable data. Anything with behavior — model clients
 
 ## 60-second quickstart
 
-Not on npm yet — run inside the repo:
+```sh
+# Node >= 20, ESM only. `ai` is @langecs/ai-sdk's peer; swap @ai-sdk/openai for
+# whichever provider you want.
+npm i @langecs/core @langecs/stdlib @langecs/ai-sdk ai @ai-sdk/openai
+```
+
+Or run the examples in this repo:
 
 ```sh
-git clone <this repo> langecs && cd langecs
+git clone https://github.com/bsteinfeld/langECS && cd langECS
 corepack enable && pnpm install             # Node >= 20, pnpm 11
 echo 'OPENAI_API_KEY=sk-...' >> .env.local  # repo root, gitignored
 pnpm -C examples react-agent                # the agent below, plus token streaming

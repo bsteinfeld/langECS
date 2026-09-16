@@ -59,6 +59,14 @@ No edges anywhere. The "graph" emerges from which systems read what other system
 
 ---
 
+## Install
+
+```sh
+npm i @langecs/core
+```
+
+ESM only, Node >= 20.
+
 ## Execution model in one screen
 
 - `world.run()` drives discrete **steps** (Pregel-style super-steps) until **quiescence**
