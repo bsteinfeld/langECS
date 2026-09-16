@@ -299,9 +299,9 @@ test('R63 a spender spawned AFTER the brake fired is still stopped', async () =>
   const late = world.spawn(Worker(), Task('late'));
   await world.run();
 
-  // Braked. It still gets the documented one-step lag — it was unstamped when it
-  // newly matched, so one call lands before the watchdog sees the ledger move —
-  // but that is one call, not free rein: previously it was never stamped at all.
+  // Braked after its one-shot work. Not(Result) stops this spender after one call;
+  // a self-invalidating spender can run again beside the watchdog in the next
+  // step before its stamp commits (covered by budget-regressions.test.ts).
   expect(world.entity(late.id)?.has(BudgetExceeded)).toBe(true);
   expect(world.entity(late.id)?.get(Result)).toBe('LATE spender answer');
 

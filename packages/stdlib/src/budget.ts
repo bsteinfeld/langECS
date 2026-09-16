@@ -118,9 +118,9 @@ export interface BudgetWatchdogOptions {
    * reaches them.
    */
   stampOn?: ComponentType<any>[];
-  /** Called when the cap is crossed — for logging or a `world.cancel()` escalation. */
+  /** Notification when the cap is crossed; exceptions cannot discard the brake. */
   onExceeded?: (status: BudgetStatus) => void;
-  /** Called when `warnAt` is crossed. */
+  /** Notification when `warnAt` is crossed; receives a detached status. */
   onApproachingCap?: (status: BudgetStatus) => void;
   /**
    * System name, so a world can hold more than one budget (a global cap plus a
@@ -146,6 +146,21 @@ export interface BudgetWatchdogOptions {
 export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
   const warnAt = opts?.warnAt;
   const stampOn = opts?.stampOn ?? [];
+  const notify = (
+    callback: ((status: BudgetStatus) => void) | undefined,
+    status: BudgetStatus,
+  ): void => {
+    try {
+      callback?.({ ...status });
+    } catch (error) {
+      // Notification is observation. R31 would otherwise discard every buffered
+      // stop/warning write and let spenders continue because logging failed.
+      (globalThis as { console?: { error?: (...args: unknown[]) => void } }).console?.error?.(
+        '[langecs] budgetWatchdog notification threw (ignored):',
+        error,
+      );
+    }
+  };
   // Validated at registration, which is the right moment to fail. `warnAt: 1`
   // reads as "warn at 100%" and produced ZERO warnings forever, because the
   // over-budget branch short-circuits first; so did `warnAt: 80`, which is what a
@@ -196,7 +211,7 @@ export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
 
       if (spent <= budget) {
         e.set(BudgetWarning, status);
-        opts?.onApproachingCap?.(status);
+        notify(opts?.onApproachingCap, status);
         return;
       }
 
@@ -208,7 +223,7 @@ export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
       // (one big call per step) otherwise never sees `onApproachingCap`.
       if (warnAt !== undefined && !e.has(BudgetWarning)) {
         e.add(BudgetWarning, status);
-        opts?.onApproachingCap?.(status);
+        notify(opts?.onApproachingCap, status);
       }
       // Reach the spenders too, or their Not(BudgetExceeded) guards never unmatch
       // and a shared budget brakes only the entity holding the ledger. `add`, not
@@ -221,7 +236,7 @@ export function budgetWatchdog(opts?: BudgetWatchdogOptions) {
           }
         }
       }
-      if (first) opts?.onExceeded?.(status);
+      if (first) notify(opts?.onExceeded, status);
     },
   });
 }
