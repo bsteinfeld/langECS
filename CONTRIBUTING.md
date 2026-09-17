@@ -56,6 +56,23 @@ live world.)
 Each example is a script in the single `examples` workspace package:
 
 ```sh
+# start here
+pnpm -C examples hello-world
+pnpm -C examples order-pipeline     # zero model calls
+pnpm -C examples tools-from-scratch
+pnpm -C examples devtools-demo      # no API key needed; run `pnpm build` once first
+# real-world workflows
+pnpm -C examples support-desk
+pnpm -C examples content-pipeline
+pnpm -C examples code-review-crew
+pnpm -C examples rag-qa
+pnpm -C examples context-window
+pnpm -C examples cancellation
+# multi-agent
+pnpm -C examples research-team
+# agents as operators (MCP server; no key needed)
+pnpm -C examples agent-playground -- --tour
+# the six LangGraph.js ports
 pnpm -C examples react-agent
 pnpm -C examples sql-agent          # needs Node >= 22.5 (node:sqlite)
 pnpm -C examples supervisor
@@ -63,6 +80,8 @@ pnpm -C examples reflection
 pnpm -C examples human-in-the-loop
 pnpm -C examples time-travel
 ```
+
+[examples/README.md](examples/README.md) is the index with one teaching sentence per example.
 
 Running a demo `main.ts` hits a real model and **requires `OPENAI_API_KEY` in a
 repo-root `.env.local`** (loaded by `examples/_shared/env.ts`; no dotenv dependency).
@@ -85,19 +104,19 @@ publishes. You do not need any of this to contribute — it is the maintainer's 
 |---|---|---|
 | `packages/core` | `@langecs/core` | The engine: world, scheduler, snapshots, events, trace. **Zero runtime dependencies, isomorphic** (no `node:*` imports). Includes the in-memory persistence adapter and `scriptedModel`. |
 | `packages/stdlib` | `@langecs/stdlib` | Standard components & systems (`Messages`, `Inbox`, retry, tool execution, approval) and agent presets (ReAct). |
-| `packages/ai-sdk` | `@langecs/ai-sdk` | Model adapter wrapping the Vercel AI SDK (`ai` v6, peer dep). |
+| `packages/ai-sdk` | `@langecs/ai-sdk` | Model adapter wrapping the Vercel AI SDK (`ai` >= 5 peer dep; developed and tested against v6). |
 | `packages/langchain` | `@langecs/langchain` | Model adapter wrapping LangChain.js chat models (`@langchain/core` peer dep). |
 | `packages/persist-fs` | `@langecs/persist-fs` | Filesystem persistence adapter (snapshots, history, time travel). |
 | `packages/otel` | `@langecs/otel` | OpenTelemetry instrumentation over the observer surface (SPEC §14); `@opentelemetry/api` peer dep only, GenAI semconv for model/tool spans. |
 | `packages/devtools` | `@langecs/devtools` | Visual inspector: Node server (WebSocket protocol + OTLP/HTTP JSON receiver) plus a React UI in `ui/` served from `dist/ui`. |
-| `examples/` | `langecs-examples` | Six LangGraph.js ports (react-agent, sql-agent, supervisor, reflection, human-in-the-loop, time-travel). These are the **v1 acceptance test** — the experiment's verdict is judged on them. |
+| `examples/` | `langecs-examples` | Eighteen runnable examples. Six are LangGraph.js ports (react-agent, sql-agent, supervisor, reflection, human-in-the-loop, time-travel) — the **v1 acceptance test** the experiment's verdict is judged on; the rest are standalone patterns. |
 
 ## Where design truth lives
 
 - **`DESIGN.md`** — the decision record: *why* things are the way they are (execution
   model, persistence, multi-agent comms, deferred v2 items, known risks).
 - **`SPEC.md`** — the engineering contract: *exact* engine semantics with numbered
-  requirements (R1, R2, …) and the required test matrix (T1–T22). Where SPEC is more
+  requirements (R1, R2, …) and the required test matrix (T1–T62). Where SPEC is more
   precise than DESIGN, **SPEC wins** — code conforming to SPEC wins disputes.
 
 If you change engine behavior, cite the requirement number you're implementing or

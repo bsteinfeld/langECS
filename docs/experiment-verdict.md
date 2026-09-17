@@ -43,8 +43,8 @@ That asymmetry is the actual finding of the experiment, and it cuts in our favor
 structurally: **the losses are tooling-fixable; the wins are architectural.** A graph
 framework cannot retrofit "three agents thinking in one step" or "the supervisor queries
 its workers' error components"; we *can* retrofit legibility — that is precisely what the
-deferred [inspector](../README.md#roadmap) (a consumer of the already-shipped trace format)
-exists to do.
+[`@langecs/devtools`](../packages/devtools) inspector (a consumer of the already-shipped
+trace format) exists to do.
 
 ## What this means (recommendation)
 

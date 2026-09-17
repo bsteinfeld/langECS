@@ -1,6 +1,6 @@
 # Examples
 
-Seventeen runnable examples, organized as a learning path: minimal starters,
+Eighteen runnable examples, organized as a learning path: minimal starters,
 real-world workflows, multi-agent patterns, and the six LangGraph.js ports that
 gated the v1 experiment — each port's README contains a deliberately honest
 side-by-side comparison with the original, including where the original wins.
@@ -78,6 +78,12 @@ event-stream demo (live tokens, step logging, error events).
 | [supervisor](supervisor/) | Parallel worker fan-out in one step, deterministic `Inbox` fan-in via reducer, mid-run agent spawning, crash → `SystemError` → heal — also the full run event-stream demo (a LangGraph port; verdict below) | `pnpm -C examples supervisor` |
 | [reflection](reflection/) | Writer ↔ critic alternation from self-write exclusion alone; the loop terminates by removing a `Reflecting` tag, not by counting messages (a LangGraph port; verdict below) | `pnpm -C examples reflection` |
 
+## Agents as operators
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| [agent-playground](agent-playground/) | A world served over MCP for an OUTSIDE agent to operate: `inspect` / `explain` (why didn't it fire — facts and trace evidence, never guard evaluation) / one-op `edit` with a revision token / bounded `run` + `run_status` handles / `cancel` / `resume` / `checkpoint` fork with the exact recipe, plus opt-in `install` of data-only components and prompt systems (the stdlib declarative layer). Three seeded failure shapes to diagnose and repair; **no API key needed** | `pnpm -C examples agent-playground -- --tour` |
+
 ## LangGraph ports + verdicts
 
 Six ports of canonical LangGraph.js examples — the acceptance gate for the v1
@@ -143,5 +149,5 @@ trust. [Full comparison →](time-travel/README.md)
 ## See also
 
 - [LangECS for LangGraph.js developers](../docs/langgraph-comparison.md) — the concept map
-- [DESIGN.md](../DESIGN.md) — why ECS; [SPEC.md](../SPEC.md) — the engine contract (R1–R44)
+- [DESIGN.md](../DESIGN.md) — why ECS; [SPEC.md](../SPEC.md) — the engine contract (R1–R64)
 - [Prior art](../docs/prior-art.md) · [Naming](../docs/naming.md)

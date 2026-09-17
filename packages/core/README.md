@@ -7,12 +7,12 @@ globals) — the same code runs in Node, browsers, and edge runtimes.
 LangECS is an experiment: "LangGraph.js, but the runtime is a living ECS world." Instead
 of a graph whose nodes pass state along edges, you get a world of **entities** (agents,
 tasks, blackboards — just ids), **components** (all state, as plain serializable data),
-and **systems** (query-driven logic that fires when the data it watches changes). The
-[six example ports](../../examples/README.md) are the acceptance test for that
-hypothesis. If you come from LangGraph.js, read the
+and **systems** (query-driven logic that fires when the data it watches changes). Eighteen
+runnable [examples](../../examples/README.md) — six of them LangGraph.js ports that gated
+v1 — are the acceptance test for that hypothesis. If you come from LangGraph.js, read the
 [concept map](../../docs/langgraph-comparison.md) first.
 
-The engineering contract is [SPEC.md](../../SPEC.md) (requirements R1–R44); the
+The engineering contract is [SPEC.md](../../SPEC.md) (requirements R1–R64); the
 rationale is [DESIGN.md](../../DESIGN.md). This README documents the full public API of
 `@langecs/core` as exported from [`src/index.ts`](src/index.ts).
 
@@ -65,7 +65,10 @@ No edges anywhere. The "graph" emerges from which systems read what other system
 npm i @langecs/core
 ```
 
-ESM only, Node >= 20.
+ESM only, Node >= 20. Every other `@langecs/*` package declares core as a **peer
+dependency**, so install it explicitly alongside them (one copy of core per app: two
+copies mean two component registries, and a snapshot written by one cannot resolve the
+other's names). Upgrade related `@langecs` packages together across 0.x minor versions.
 
 ## Execution model in one screen
 
@@ -79,8 +82,10 @@ ESM only, Node >= 20.
   step-start state; mutations buffer per pair and apply at the **barrier** in
   deterministic order (system registration index, then entity id).
 - Two pairs writing the same **reducer** component in one step merge deterministically.
-  Two pairs writing the same **plain** component throw `WriteConflictError` — silent
-  last-write-wins is impossible by construction.
+  Any other way two pairs can decide one (entity, component) slot in one step —
+  writing a **plain** component, a write racing a `remove`, a `ctx.spawn` init racing a
+  sibling's write — throws `WriteConflictError`; concurrent `remove`s are order-free and
+  commit. Silent last-write-wins is impossible by construction.
 - A throwing system discards its buffered writes and appends a `SystemError` record to
   the entity; other pairs commit normally. Failure is state you can query.
 - After every barrier, the world is at a consistent boundary: snapshots are taken there,
@@ -453,6 +458,9 @@ interface StepTrace {
   despawned: number[];
   droppedWrites?: DroppedWrite[];  // ops on entities despawned this step
   durationMs: number;
+  committed?: false;           // the fully-vetoed, zero-step iteration that ends a run:
+                               // nothing committed, so `step` is the step it WOULD have
+                               // been and a later run reuses that number
 }
 ```
 
@@ -684,7 +692,7 @@ All engine errors extend `LangECSError extends Error`.
 |---|---|
 | `DuplicateComponentError` | `defineComponent`/`defineTag` reuses an existing name. Field: `componentName`. |
 | `DuplicateSystemError` | A system key is registered twice with a different definition. Field: `systemKey`. |
-| `WriteConflictError` | Two pairs write the same plain (reducer-less) component on one entity in one step. Fields: `component`, `entity`, `step`, and `pairs: { system, entity }[]` — the writer pairs in deterministic barrier order (`entity` is the **writer's** entity, which matters for cross-entity `ctx.write`). `systems` is a derived display-string getter; prefer `pairs` in code. |
+| `WriteConflictError` | Two different pairs decide the same (entity, component) slot in one step — by a write, a `remove`, or a spawn-time init. Exempt: all-writes on a reducer component, and all-removes. Fields: `component`, `entity`, `step`, and `pairs: { system, entity }[]` — the writer pairs in deterministic barrier order (`entity` is the **writer's** entity, which matters for cross-entity `ctx.write`). `systems` is a derived display-string getter; prefer `pairs` in code. |
 | `WorldRunningError` | External mutation, registration, `load`, or a second `run()` while a run is in flight. |
 | `UnknownComponentError` | `load()` meets component names missing from the registry. Field: `componentNames`. |
 | `UnknownSystemError` | `load()` meets unregistered `pendingPairs` systems, or `ctx.invalidate` names an unresolvable system. Field: `systemNames`. |
@@ -699,17 +707,22 @@ errors take inside `SystemError` records and `system:error` events.
 
 ---
 
+## Observability, shipped separately
+
+Both consumers of the observer surface (`world.observe`, SPEC §14) live in their own
+packages so core stays dependency-free:
+
+- [`@langecs/otel`](../otel/README.md) — OpenTelemetry spans and metrics: run/step/system
+  spans, GenAI-semconv model and tool spans with token usage.
+- [`@langecs/devtools`](../devtools/README.md) — the visual inspector: live entity and
+  component editing, systems and dirty pairs, the flight-recorder timeline, an OTLP trace
+  waterfall, interrupt answering, time travel.
+
 ## Roadmap
 
-Designed but deliberately deferred until after the example-port verdict
-(see [DESIGN.md §8 and §11](../../DESIGN.md)):
-
-- **OpenTelemetry export** — built strictly as a consumer of the flight-recorder
-  `StepTrace` format above; no bespoke plumbing.
-- **Visual world inspector** — watch components flow between agents, step slider, time
-  travel; same trace format as its data source.
-- Per-entity independent stepping, durable persistence adapters (SQLite/Postgres),
-  a declarative YAML/JSON agent format, `interrupt()` sugar, LangGraph interop.
+Designed but deliberately deferred (see [DESIGN.md §11](../../DESIGN.md)): per-entity
+independent stepping, durable persistence adapters (SQLite/Postgres), a declarative
+YAML/JSON agent format, `interrupt()` sugar, LangGraph interop.
 
 ---
 
@@ -721,7 +734,10 @@ Designed but deliberately deferred until after the example-port verdict
   — model adapters
 - [@langecs/persist-fs](../persist-fs/README.md) — filesystem snapshots,
   kill-and-resume
-- [Examples](../../examples/README.md) — the six LangGraph.js ports that gate v1
+- [@langecs/otel](../otel/README.md) — OpenTelemetry instrumentation over `world.observe`
+- [@langecs/devtools](../devtools/README.md) — the visual world inspector
+- [Examples](../../examples/README.md) — eighteen runnable examples, six of them the
+  LangGraph.js ports that gated v1
 - [LangGraph comparison](../../docs/langgraph-comparison.md) ·
   [Prior art](../../docs/prior-art.md) · [Naming](../../docs/naming.md)
 - [SPEC.md](../../SPEC.md) · [DESIGN.md](../../DESIGN.md) ·

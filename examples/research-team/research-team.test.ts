@@ -192,3 +192,58 @@ test('a tiny token budget halts the team gracefully with partial findings', asyn
   expect(stampStep).toBe(1);
   expect(trace.slice(stampStep + 1).flatMap((s) => s.runs)).toEqual([]);
 });
+
+test('a malformed plan is retried through the schema validator instead of crashing the planner', async () => {
+  const world = createWorld();
+  const requests: ModelRequest[] = [];
+  world.register(
+    ResearchModel,
+    scriptedModel([
+      // `{}` parses as JSON but lacks `subQuestions`; before the validator this
+      // reached `.slice` and threw a TypeError (SystemError, receipt lost).
+      (req) => {
+        requests.push(req);
+        return { role: 'assistant', content: '{}' };
+      },
+      (req) => {
+        requests.push(req);
+        return { role: 'assistant', content: PLAN_JSON };
+      },
+      findingFor,
+      findingFor,
+      { role: 'assistant', content: '{"weak": []}' },
+      { role: 'assistant', content: 'ANSWER: honey is sugars at low water activity.' },
+    ]),
+  );
+  const board = spawnResearchTeam(world);
+  const result = await world.send(board, Question('Why does honey never spoil?'));
+  expect(result.status).toBe('done');
+  expect(result.errors).toEqual([]);
+  expect(requests[1]?.messages.at(-1)?.content).toContain(
+    'missing required property "subQuestions"',
+  );
+  expect(board.get(Plan)).toHaveLength(2);
+  // Both planner calls were paid for and both are on the ledger.
+  expect((board.get(TokenUsage) ?? []).filter((s) => s.system === 'planner')).toHaveLength(2);
+});
+
+test('KNOWN LIMIT: a receipt buffered by a pair that then throws is lost with the pair (R31)', async () => {
+  const world = createWorld();
+  world.register(
+    ResearchModel,
+    scriptedModel([
+      // Two unusable replies exhaust extractJson's retry, so the planner throws
+      // AFTER two paid calls. The engine discards the whole buffer — including
+      // the two TokenUsage receipts the meter appended.
+      { role: 'assistant', content: 'not json' },
+      { role: 'assistant', content: 'still not json' },
+    ]),
+  );
+  const board = spawnResearchTeam(world);
+  const result = await world.send(board, Question('Why does honey never spoil?'));
+  expect(result.status).toBe('error');
+  expect(result.errors[0]?.records[0]?.system).toBe('planner');
+  // This is the documented limitation, asserted so a fix is visible when it lands:
+  // the ledger shows nothing although the provider was called twice.
+  expect(board.get(TokenUsage)).toBeUndefined();
+});

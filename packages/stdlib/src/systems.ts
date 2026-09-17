@@ -5,6 +5,7 @@ import {
   AwaitingHuman,
   Cancelled,
   defineSystem,
+  delay,
   type EntityReadView,
   type GuardCtx,
   HumanResponse,
@@ -14,6 +15,7 @@ import {
   type Msg,
   Not,
   SystemError,
+  throwIfAborted,
 } from '@langecs/core';
 import {
   Messages,
@@ -27,14 +29,6 @@ import {
   Tools,
 } from './components';
 import { bareToolName, lookupTool, toToolSpec } from './tools';
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise<void>((resolve) => {
-    (globalThis as unknown as { setTimeout(cb: () => void, ms: number): unknown }).setTimeout(
-      resolve,
-      ms,
-    );
-  });
 
 /** Pending tool calls whose registered ToolDef has `needsApproval: true`. */
 function approvalNeeded(e: EntityReadView<any>, ctx: GuardCtx): ToolCall[] {
@@ -200,6 +194,15 @@ export const executeTools = defineSystem({
  * Carries `Not(Cancelled)` (R50): a cancelled world must not re-arm the work the
  * operator just stopped. Cancellation-induced failures write no `SystemError` at
  * all, so this guard covers the remaining case — errors that predate the cancel.
+ * The backoff itself is interruptible (`delay(ms, ctx.signal)`, R49/R51) and the
+ * signal is re-checked before invalidating, so a cancel mid-backoff both
+ * shortens the wait and re-arms nothing.
+ *
+ * Records naming a system this build does not have are skipped rather than
+ * retried (R24/R55): `ctx.invalidate` with an unresolvable name rejects the
+ * whole run, and a snapshot taken before a system was renamed or removed
+ * carries exactly such names — the deploy-survival case SPEC §16 exists for.
+ * The record stays on the entity, so the run still quiesces `'error'`.
  */
 export const retry = defineSystem({
   name: 'retry',
@@ -210,15 +213,29 @@ export const retry = defineSystem({
     for (const record of e.get(SystemError)) {
       attempts.set(record.system, (attempts.get(record.system) ?? 0) + 1);
     }
-    let delay = 0;
+    // `ctx.invalidate` resolves a name against registered keys AND definition
+    // names (R24), so accept either here.
+    const known = new Set<string>();
+    for (const info of ctx.world.systems()) {
+      known.add(info.key);
+      known.add(info.name);
+    }
+    let waitMs = 0;
     const targets: string[] = [];
     for (const [system, count] of attempts) {
       if (count > policy.max) continue; // exhausted: stay quiescent-with-error
-      delay = Math.max(delay, policy.baseMs * 2 ** (count - 1));
+      if (!known.has(system)) continue; // gone from this build: unretryable, not fatal
+      waitMs = Math.max(waitMs, policy.baseMs * 2 ** (count - 1));
       targets.push(system);
     }
     if (targets.length === 0) return;
-    if (delay > 0) await sleep(delay);
+    // Interruptible (R51): a bare setTimeout made `world.cancel()` wait out the
+    // full backoff and then commit the invalidate anyway, re-arming the very
+    // work the operator stopped. Failing by the signal's own abort value is
+    // what buys the pair cancellation identity — no ErrorRecord (R31), no dirt
+    // consumed, nothing scheduled.
+    if (waitMs > 0) await delay(waitMs, ctx.signal);
+    throwIfAborted(ctx.signal);
     for (const system of targets) ctx.invalidate(e, system);
   },
 });

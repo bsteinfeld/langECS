@@ -33,6 +33,16 @@ coordination machinery, not retrieval.
    component with `Not()`, so the world quiesces gracefully with partial
    results — no exception, no special shutdown path. (The brake has one step
    of lag by design: calls already executing when the ledger tips still land.)
+   The ledger is **best-effort accounting**: a spend is a buffered write in the
+   calling pair, so a system that throws after its model call (R31) — or a run
+   the barrier rejects (R30) — loses that receipt even though the provider was
+   paid. Structured-output replies are therefore validated with stdlib's
+   `schemaValidator` — a malformed plan is retried once with the violations as
+   context; a second malformed reply still throws (the `KNOWN LIMIT` test shows
+   both receipts lost). Authoritative billing belongs outside the transaction:
+   `withCost` on the model resource (which observes successful results only) or a
+   host-side ledger such as the stdlib `PromptLedger` that records attempts at
+   admission.
 
 ## The choreography of a run
 

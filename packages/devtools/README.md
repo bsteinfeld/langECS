@@ -30,6 +30,7 @@ invariants.
 ## Install
 
 ```sh
+npm i @langecs/core
 npm i -D @langecs/devtools
 ```
 

@@ -4,7 +4,7 @@
 
 Agents are entities. All agent state — message history, pending tool calls, errors, interrupts — is components (pure JSON data). Logic is systems: queries over components plus an async handler. There are no edges and no router; a system fires when another system's writes dirty the components its query watches, and a run ends when nothing fires (quiescence). One sentence of positioning: **LangGraph is Pregel over a closed graph; LangECS is Pregel over an open world.**
 
-> **Status: v0.1, an experiment — verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side and judging honestly (each port's [README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable and 0.x versioning means minor bumps can break you. The name `langecs` was reviewed for a rename and kept ([docs/naming.md](docs/naming.md) records the candidates and the reasoning); it is not affiliated with LangChain.
+> **Status: v0.2, published to npm as `@langecs/*` — experiment verdict in.** This repo exists to validate a hypothesis — that an ECS substrate makes agent orchestration clearer and more flexible than a graph — by porting six LangGraph.js examples side by side (six of the eighteen examples in [examples/](examples/README.md)) and judging honestly (each port's [README](#examples) contains its verdict, including where LangGraph is better; the aggregate judgment is in [docs/experiment-verdict.md](docs/experiment-verdict.md)). APIs are unstable and 0.x versioning means minor bumps can break you. The name `langecs` was reviewed for a rename and kept ([docs/naming.md](docs/naming.md) records the candidates and the reasoning); it is not affiliated with LangChain.
 
 "Agents as ECS entities" is not a new idea — [ArgOS](https://github.com/project-89/argOS) and DeepMind's [Simulation Streams](https://arxiv.org/abs/2501.18668) got there first, on the simulation side. What LangECS adds is the runtime:
 
@@ -185,7 +185,7 @@ And when something *doesn't* fire, the built-in flight recorder answers why: eve
 
 ## Examples
 
-Fourteen runnable examples form a learning path — [examples/README.md](examples/README.md) is the full index. Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY` — except order-pipeline, which makes zero model calls) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network. Every `main.ts` outside the ports is await-and-read-state — no event handling required; streaming is opt-in ([supervisor](examples/supervisor/README.md) is the full event-stream demo).
+Eighteen runnable examples form a learning path — [examples/README.md](examples/README.md) is the full index. Every example ships a live demo (`pnpm -C examples <name>`, needs `OPENAI_API_KEY` — except order-pipeline, which makes zero model calls) and a deterministic `scriptedModel` test that asserts the step-by-step choreography with zero network. Every `main.ts` outside the ports is await-and-read-state — no event handling required; streaming is opt-in ([supervisor](examples/supervisor/README.md) is the full event-stream demo).
 
 **Start here**
 
@@ -203,6 +203,9 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 | [support-desk](examples/support-desk/README.md) | Entities as work items: concurrent triage, `when`-guard routing, per-ticket human escalation |
 | [content-pipeline](examples/content-pipeline/README.md) | A staged pipeline with no orchestrator: `ctx.spawn` fan-out, reducer fan-in, count-guard readiness |
 | [code-review-crew](examples/code-review-crew/README.md) | Three reviewers, one step: same-query fan-out, the step barrier as the join, a lead verdict |
+| [rag-qa](examples/rag-qa/README.md) | Retrieval-augmented QA as a pipeline: `extractJson` decomposes the question, one retriever entity per sub-query runs in parallel, an append reducer fans the passages back in |
+| [context-window](examples/context-window/README.md) | A long conversation under a token budget: `withMessageWindow` trims what each call sees while the full transcript stays durable state |
+| [cancellation](examples/cancellation/README.md) | Stopping work in flight: `world.cancel()` stamps `Cancelled` (the stop button is a `Not(Cancelled)` query term), `ctx.signal` aborts open calls, `timeoutMs` frees a hung barrier |
 
 **Multi-agent**
 
@@ -211,6 +214,12 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 | [research-team](examples/research-team/README.md) | Runtime agent spawning onto a shared blackboard, a bounded critic cycle, a global token budget |
 | [supervisor](examples/supervisor/README.md) | Parallel worker fan-out, `Inbox` fan-in, mid-run spawning, crash → heal (also a LangGraph port) |
 | [reflection](examples/reflection/README.md) | Writer↔critic alternation from self-write exclusion; termination by removing a tag (also a port) |
+
+**Agents as operators**
+
+| Example | What it teaches |
+|---|---|
+| [agent-playground](examples/agent-playground/README.md) | A world served over MCP for an outside agent to inspect, explain, repair, run, fork — and, opt-in, extend with data-only prompt systems (no API key needed) |
 
 **LangGraph ports + verdicts** — the six side-by-side ports that gated the experiment; each README ends with an honest comparison ([examples/README.md](examples/README.md#langgraph-ports--verdicts) condenses all six verdicts):
 
@@ -247,21 +256,21 @@ Fourteen runnable examples form a learning path — [examples/README.md](example
 **Background and reference**
 
 - [docs/experiment-verdict.md](docs/experiment-verdict.md) — the aggregate verdict on the six ports: hypothesis validated, with the wins/losses pattern and what gates a release
+- [docs/agents-as-users.md](docs/agents-as-users.md) — **agents as the users**: the two hypotheses (operate a world from outside; author behavior as data), what shipped to test them (`examples/agent-playground`, the stdlib declarative layer), what is verified now versus proposed, and the known limits
 - [docs/prior-art.md](docs/prior-art.md) — what already exists (ArgOS, Simulation Streams, blackboard systems, Pregel, production rules, Linda, durable execution) and which claims we soften because of it
 - [DESIGN.md](DESIGN.md) — the decision record: why each piece is the way it is
 - [SPEC.md](SPEC.md) — the engineering contract: numbered requirements (R1–R64) and the required test matrix (T1–T62)
-- [docs/naming.md](docs/naming.md) — the rename research (`langecs` is a working title)
+- [docs/naming.md](docs/naming.md) — the rename pass and the decision to keep `langecs`
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, commands, repo conventions
 
 ## Roadmap
 
-Designed but deliberately deferred until the port verdicts are in:
+Designed but deliberately deferred (the port verdicts are in; see [docs/experiment-verdict.md](docs/experiment-verdict.md)):
 
-- **Declarative agent format** — a thin YAML/JSON loader over `defineAgent` (agent definitions are already pure data + name refs)
+- **Agents as operators and authors** — test the two hypotheses in [docs/agents-as-users.md](docs/agents-as-users.md): an outside agent operating a world over MCP against a JSON-store baseline (the apparatus is `examples/agent-playground`), then prompt-authored behavior. Candidate core changes if they hold: an idle-time `world.unuse`/replace, admission-controlled budgets on the prompt ledger
+- **Declarative agent format** — a thin YAML/JSON loader over `defineAgent` (agent definitions are already pure data + name refs); the stdlib declarative layer (components and prompt systems as JSON, experimental) is its first slice
 - **Per-entity independent stepping** — opt-in escape from the global step barrier for large, heterogeneous worlds
 - **Deep ECS relations** — messages and tool calls as entities with relation components (`BelongsTo`, `IssuedBy`), flecs-style pairs and cleanup policies
 - **`interrupt()` sugar** — LangGraph-style mid-system pause that compiles down to the existing `AwaitingHuman` convention
 - **`@langecs/langgraph` interop** — mount a compiled LangGraph graph as a LangECS system, for incremental migration
-- **OTel export + visual world inspector** — both built strictly as consumers of the flight-recorder trace format (the trace is already a v1 surface; these are its first external consumers)
 - **Durable persistence adapters** — SQLite/Postgres/Redis, snapshot deltas
-- **Rename** — before anything ships publicly; candidates and research in [docs/naming.md](docs/naming.md)

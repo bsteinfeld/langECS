@@ -243,7 +243,7 @@ First-party adapter packages:
 | `@langecs/langchain` | LangChain.js chat models; converts message classes ↔ plain JSON at the boundary | v1 |
 | `@langecs/langgraph` | Interop: mount a compiled LangGraph graph *as a LangECS system* — incremental-migration story | post-validation stretch |
 
-Swapping models is a registry entry. A scripted `FakeModel` implements `Model`
+Swapping models is a registry entry. A scripted model (`scriptedModel`) implements `Model`
 trivially → the entire engine test suite runs deterministic with zero API calls.
 
 ---
@@ -335,7 +335,7 @@ baselines are at least par.
 
 - **pnpm monorepo**, ESM-only, TypeScript strict, Node ≥ 20
 - **Core is isomorphic** (no Node APIs) → browser/edge later for free (in-browser inspector demo, edge agents)
-- Build: tsdown · Tests: vitest (deterministic via FakeModel) · Lint/format: Biome
+- Build: tsdown · Tests: vitest (deterministic via `scriptedModel`) · Lint/format: Biome
 
 ```
 langecs/
@@ -344,11 +344,13 @@ langecs/
 │  ├─ stdlib/      # components & systems: Inbox, retry, AwaitingHuman, ReAct preset…
 │  ├─ ai-sdk/      # Vercel AI SDK model adapter
 │  ├─ langchain/   # LangChain.js model adapter
-│  └─ persist-fs/  # filesystem persistence adapter
-├─ examples/
-│  ├─ react-agent/   sql-agent/
-│  ├─ supervisor/    reflection/
-│  └─ human-in-loop/ time-travel/
+│  ├─ persist-fs/  # filesystem persistence adapter
+│  ├─ otel/        # OpenTelemetry bridge over world.observe (§8)
+│  └─ devtools/    # visual inspector: WS server + OTLP receiver + React UI (§8)
+├─ examples/       # eighteen; the six v1-gating ports are:
+│  ├─ react-agent/       sql-agent/
+│  ├─ supervisor/        reflection/
+│  └─ human-in-the-loop/ time-travel/
 └─ pnpm-workspace.yaml
 ```
 
@@ -376,6 +378,6 @@ it for a 0.x experiment. Revisit if the project outgrows that framing.
 ## 12. Known risks
 
 - **Global barrier latency** in heterogeneous worlds (one slow LLM call stalls the step) — accepted for v1, per-entity stepping is the planned escape.
-- **Dirty-trigger semantics** are the subtlest part of the engine; they need exhaustive deterministic tests (FakeModel) before any example is ported.
+- **Dirty-trigger semantics** are the subtlest part of the engine; they need exhaustive deterministic tests (`scriptedModel`) before any example is ported.
 - **Inspector scope creep** — it's gated behind the ports and the trace format on purpose; hold that line.
 - **The hypothesis may fail** — the supervisor/reflection ports may not beat StateGraph. That outcome is a valid (and publishable) result of the experiment.

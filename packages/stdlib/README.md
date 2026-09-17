@@ -409,6 +409,78 @@ renderer with an explicit priority and reset policy. Reducers run for `add`;
 `set` deliberately replaces the value and bypasses the reducer. A priority reducer
 also applies across steps, so use an explicit reset when work resumes.
 
+## Declarative layer (experimental)
+
+Components and systems as **data**, so an agent or a config file can extend a live world
+without shipping code, and a snapshot can carry its own vocabulary. Zero engine changes:
+everything compiles to `defineComponent`/`defineSystem` (SPEC §19, R65–R69; the design
+record is [docs/agents-as-users.md](../../docs/agents-as-users.md)).
+
+```ts
+import { createWorld } from '@langecs/core';
+import { declareComponent, declareSystem, forkFromSnapshot, promptLedger } from '@langecs/stdlib';
+
+const world = createWorld();
+world.register('model:main', model);
+
+declareComponent(world, {
+  name: 'Sentiment',
+  description: 'how the customer sounds',
+  schema: { type: 'object', properties: { tone: { type: 'string', enum: ['angry', 'neutral', 'happy'] } }, required: ['tone'] },
+});
+declareSystem(world, {
+  name: 'readTone',
+  query: ['Ticket'],          // the ONLY wake dependencies (R26)
+  not: ['Sentiment'],         // one-shot
+  writes: ['Sentiment'],      // the only component it may touch, on the matched entity only
+  model: 'model:main',
+  prompt: 'Judge the tone of the customer text.',
+});
+await world.run();
+promptLedger(world).attempts;   // every model call, settled outside barrier rollback
+
+// Elsewhere, from the snapshot alone plus the hand-written recipe:
+const fork = forkFromSnapshot({ snapshot: world.snapshot(), build: (w) => w.register('model:main', model) });
+```
+
+What a prompt system does: shows the entity's queried components to the model as JSON, asks
+for `{ writes, remove, note }`, validates **the whole proposal before buffering anything** —
+only declared names, tag values, the declared schema against the value *after* the reducer
+merges it, the reducer's input kind — applies it through ordinary `add`/`remove`, appends
+`TokenUsage` receipts and a `PromptRuns` count. A malformed reply is retried once with the
+violations as context, then recorded as `ProposalRejected` **state** (bounded) — not thrown,
+because a throw would discard the receipt for the call just paid for. On the expected paths
+only a provider failure or a cancellation throws; a defect (a broken validator, a reducer that
+throws) still surfaces as a `SystemError` rather than being hidden. A world without a
+`PromptLedger` fails the pair before any call is made — `declareSystem` registers one; a
+hand-wired `world.use(systemFromDecl(…))` must call `promptLedger(world)` first. `maxRuns`
+counts executions, each of which may make one correction call.
+
+What it cannot do: write or remove anything it did not declare; touch reserved control and
+capability components (`Recipe`, `Cancelled`, `AwaitingHuman`, `HumanResponse`, `SystemError`,
+budgets, `Tools`, `ModelRef`, `PendingToolCalls`, `MessageWaiting`, `RetryPolicy`, `agent:*`);
+touch another entity; spawn, despawn, invalidate; define systems. `maxRuns` (default 8) vetoes
+a system that has run that often on an entity — the brake for two data-defined systems that
+wake each other. `declareSystem` refuses two prompt systems that would collide on a plain
+component (a `WriteConflictError` after both calls were paid for). Two more rails: a declared
+component with both a schema and a reducer **enforces the schema inside the reducer**, so two
+concurrent writes that are each valid but together break the bound reject the step at the
+barrier instead of committing a value the schema forbids; and `maxRuns` is checked at
+**admission** against the `PromptLedger` too, because the committed `PromptRuns` counter never
+lands when a sibling's conflict rejects the step, and a retried run would otherwise pay again.
+Every prompt system also carries `Not(BudgetExceeded)` (R63) without being asked.
+`checkDeclaredWrite(name, value, current?)` exposes the proposal validation to hosts that accept
+external edits.
+
+Honest limits: the `TokenUsage` mirror commits only with the pair — the `PromptLedger`
+resource is the accounting to trust, and a failed attempt's tokens are *unknown*, not zero;
+`Not(ProposalRejected)` parks every halting prompt system on that entity together; component
+names are global per realm (R7), so a changed schema needs a new name; `world.use` has no
+inverse, so a changed prompt needs a new system name; `hydrateRecipe` refuses a different
+registration order because barrier apply order follows it (R25) — register hand-written
+systems first, in the recorded order, or use `forkFromSnapshot`. `schemaValidator(schema)`
+is also exported on its own as an `extractJson` validate hook.
+
 ## See also
 
 - [@langecs/core](../core/README.md) — the engine API this package builds on

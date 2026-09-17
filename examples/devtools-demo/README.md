@@ -45,7 +45,7 @@ OTLP backend and you get the same traces in Jaeger/Grafana/Honeycomb.
 ## Test
 
 The scenario itself (policy model, approval arc, retry healing) is covered
-deterministically — zero network — in [`demo.test.ts`](demo.test.ts):
+deterministically — zero network — in [`devtools-demo.test.ts`](devtools-demo.test.ts):
 
 ```sh
 pnpm -C examples exec vitest run devtools-demo

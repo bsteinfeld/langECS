@@ -1,8 +1,8 @@
 # Naming the project (rename pass for "langecs")
 
-*Research date: 2026-06-10. Context: DESIGN.md §10 flags `langecs` as a working title —
-the "Lang—" prefix risks LangChain brand confusion and must be renamed before any
-public release.*
+*Research date: 2026-06-10. Context at the time: DESIGN.md §10 flagged `langecs` as a
+working title — the "Lang—" prefix risks LangChain brand confusion and was to be renamed
+before any public release. The decision below superseded that.*
 
 > **Decision (2026-09-16): keep `langecs`.** This pass ran to completion and produced a
 > good shortlist; the call went the other way. At 0.x the rename's cost — the `@langecs`

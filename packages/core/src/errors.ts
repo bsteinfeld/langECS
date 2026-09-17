@@ -32,7 +32,13 @@ export class DuplicateSystemError extends LangECSError {
   }
 }
 
-/** Thrown at the barrier when two pairs write the same plain (reducer-less) component (R30). */
+/**
+ * Thrown at the barrier when two different pairs decide the same (entity,
+ * component) slot in one step (R30 amended) — by a write (add/set), a `remove`,
+ * or a spawn-time init. Concurrent writes merge only on a component with a
+ * reducer, and concurrent removes are idempotent; every other combination is
+ * this error.
+ */
 export class WriteConflictError extends LangECSError {
   readonly component: string;
   readonly entity: number;
@@ -52,9 +58,13 @@ export class WriteConflictError extends LangECSError {
     pairs: { system: string; entity: number }[],
   ) {
     super(
-      `Write conflict on plain component "${component}" of entity ${entity} at step ${step}: ` +
-        `${pairs.map((p) => `${p.system} (entity ${p.entity})`).join(' and ')} wrote it in the same step. ` +
-        `Give the component a reducer to merge concurrent writes, or serialize the writers.`,
+      `Write conflict on component "${component}" of entity ${entity} at step ${step}: ` +
+        `${pairs.map((p) => `${p.system} (entity ${p.entity})`).join(' and ')} ` +
+        `wrote, removed, or spawn-initialized it in the same step (R30). ` +
+        `Only concurrent \`add\`s to a component with a reducer merge (a \`set\` replaces and ` +
+        `bypasses the reducer), and only concurrent removes are order-free. A reducer cannot ` +
+        `reconcile a write with a remove or a spawn-time init — serialize those writers instead, ` +
+        `e.g. gate one on a component the other writes.`,
     );
     this.name = 'WriteConflictError';
     this.component = component;

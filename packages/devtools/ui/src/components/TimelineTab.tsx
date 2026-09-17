@@ -184,8 +184,10 @@ export function TimelineTab() {
         </label>
       </div>
       <div className="timeline-scroll" ref={scrollRef}>
-        {state.trace.map((step) => (
-          <StepBlock key={step.step} step={step} onInspect={onInspect} />
+        {state.trace.map((step, i) => (
+          // Step numbers can repeat: a veto-only iteration (`committed: false`)
+          // reuses the number of the step a later run then commits (R42).
+          <StepBlock key={`${i}:${step.step}`} step={step} onInspect={onInspect} />
         ))}
       </div>
     </div>

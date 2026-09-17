@@ -17,15 +17,19 @@ The check needs `npm` and `tar`; its consumer install is offline and disables sc
 | Trigger | pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml) |
 | Published | `@langecs/core`, `stdlib`, `ai-sdk`, `langchain`, `otel`, `persist-fs`, `devtools` |
 
-## One-time npm setup
+## One-time npm setup (done — kept as the record)
 
-Everything in this section happens on npmjs.com and is not automatable from this repo.
+This section is complete: the `@langecs` scope is owned and all seven packages are live
+on npm (0.1.0 and 0.2.0). Nothing here needs repeating — skip to
+[Cutting a release](#cutting-a-release). It stays here because everything in it happens on
+npmjs.com and is not automatable from this repo, so it is the only written trace of how
+the registry side was set up.
 
 ### 1. Own the `@langecs` scope
 
-`@langecs/*` needs the `langecs` scope to exist and belong to you. Nothing is published
-under it today, but an *unpublished scope is not a reserved one* — the org name is
-first-come. Create it at [npmjs.com/org/create](https://www.npmjs.com/org/create); the
+`@langecs/*` needs the `langecs` scope to exist and belong to you. Before the first
+publish nothing existed under it, and an *unpublished scope is not a reserved one* — the
+org name is first-come. Create it at [npmjs.com/org/create](https://www.npmjs.com/org/create); the
 free tier covers unlimited public packages.
 
 ### 2. Turn on 2FA
@@ -34,7 +38,7 @@ Account settings → Two-factor authentication, set to **Authorization and write
 Approving a staged release (step 5) requires it, and it is what stops a stolen password
 from becoming a supply-chain incident.
 
-### 3. Publish v0.1.0 by hand, once
+### 3. Publish the first version by hand, once *(done: v0.1.0)*
 
 npm cannot configure a trusted publisher for a package that does not exist yet, and OIDC
 cannot create one — so the first version of each package goes out from your machine.

@@ -105,6 +105,11 @@ const world = createWorld({ id: 'records-world', persistence: fsAdapter({ dir: D
 The run-end save carries the same `step` as the last barrier save, so step-keyed
 stores (both built-in adapters) naturally dedupe it.
 
+A `save` that **throws** rejects the run, and — unlike a barrier rejection (R30) —
+leaves committed state *one step past* the step-start boundary, because the step whose
+save failed has already committed: treat it as "the world advanced, the store did not"
+and re-save or reload, rather than assuming the step will be redone by the next `run()`.
+
 ## Adapters
 
 The contract is four functions, two of them optional
