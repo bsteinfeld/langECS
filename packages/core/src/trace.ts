@@ -24,6 +24,13 @@ export interface DroppedWrite {
 }
 
 export interface StepTrace {
+  /**
+   * The step this entry describes. For a committed step this is the step
+   * counter's value after the barrier; for the fully-vetoed, zero-step
+   * iteration that ends a run (`committed: false`) it is the step that
+   * iteration WOULD have been — no step commits, so a later run reuses the
+   * number and `getTrace()` can hold two entries labelled alike.
+   */
   step: number;
   /** All matched+dirty candidates this step, before `when` guards. */
   scheduled: PairRef[];
@@ -38,6 +45,13 @@ export interface StepTrace {
   despawned: number[];
   droppedWrites?: DroppedWrite[];
   durationMs: number;
+  /**
+   * `false` on the fully-vetoed, zero-step iteration that quiesces a run
+   * (R42/R45): every candidate's `when` guard vetoed, so the entry records the
+   * vetoes and consumed dirt but **nothing was committed** and the step counter
+   * did not advance. Absent on every committed step.
+   */
+  committed?: false;
 }
 
 const pair = (p: PairRef): string => `${p.system}#${p.entity}`;
@@ -46,7 +60,8 @@ const pair = (p: PairRef): string => `${p.system}#${p.entity}`;
 export function formatTrace(steps: StepTrace[]): string {
   const lines: string[] = [];
   for (const s of steps) {
-    lines.push(`step ${s.step} (${s.durationMs.toFixed(1)}ms)`);
+    const label = s.committed === false ? ' (vetoed only, not committed)' : '';
+    lines.push(`step ${s.step}${label} (${s.durationMs.toFixed(1)}ms)`);
     if (s.scheduled.length > 0) lines.push(`  scheduled: ${s.scheduled.map(pair).join(', ')}`);
     if (s.vetoed.length > 0) lines.push(`  vetoed:    ${s.vetoed.map(pair).join(', ')}`);
     for (const r of s.runs) {

@@ -400,6 +400,6 @@ editing the result of `handle.get(C)`.
 - [langgraph-comparison.md](./langgraph-comparison.md) — for LangGraph.js
   developers; honest divergence list.
 - [prior-art.md](./prior-art.md) — the survey of adjacent work.
-- [SPEC.md](../SPEC.md) — the numbered engineering contract (R1–R44) this page
+- [SPEC.md](../SPEC.md) — the numbered engineering contract (R1–R64) this page
   paraphrases; where they disagree, the spec wins.
 - [DESIGN.md](../DESIGN.md) — why each of these decisions was made.

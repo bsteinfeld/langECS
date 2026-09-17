@@ -98,6 +98,12 @@ with `attempts ≤ max` waits `baseMs · 2^(attempts−1)` and calls
 systems on the same entity are never re-fired. Past `max` it stops invalidating — the
 run quiesces with status `'error'` and the records intact for someone else to handle.
 
+Two details make it safe against the world changing underneath it: a record naming a
+system **this build no longer has** (renamed or deleted since the snapshot was written)
+is skipped rather than invalidated — an unknown name would reject the whole run (see
+below) — and the backoff is the interruptible `delay(ms, ctx.signal)`, so
+`world.cancel()` mid-backoff returns at once and re-arms nothing.
+
 ## `ctx.invalidate`: the re-fire primitive
 
 `ctx.invalidate(target, system?)` manually marks (system, entity) — or all systems for
@@ -105,7 +111,9 @@ the entity — dirty for the next step (R24). It's the escape hatch that retry a
 healing are built on, with two safety properties:
 
 - An **unknown system name** rejects the run during barrier staging (typo ≠ silent
-  no-op).
+  no-op). When the name comes from *data* rather than a literal — a persisted
+  `ErrorRecord.system`, say — check it against `ctx.world.systems()` first, the way
+  stdlib `retry` does.
 - An invalidate whose **target entity no longer exists** at the barrier is dropped and
   recorded in the trace's `droppedWrites` — phantom dirt never reaches a snapshot's
   `pendingPairs`.
@@ -157,9 +165,13 @@ await world.run(); // rejects with WriteConflictError
 ```
 
 `WriteConflictError` names the component, entity id, step, and the conflicting pairs
-(`error.pairs`), because two different pairs wrote the same plain (reducer-less)
-component on the same entity in one step (R30). Silent last-write-wins is impossible
-by construction. The fix is one of:
+(`error.pairs`), because two different pairs decided the same (entity, component) slot
+in one step (R30). The scan covers every op that decides that slot — a write (`add`/
+`set`), a `remove`, and a spawn-time init — with exactly two order-free exemptions:
+writes to a component that **has a reducer**, and groups where every op is a `remove`.
+So a `set` racing a `remove`, an `add` racing a `remove` on a reducer component, and a
+`ctx.spawn(C(v))` racing a sibling's write to that new entity all reject too. Silent
+last-write-wins is impossible by construction. The fix is one of:
 
 - **give the component a reducer** — concurrent `add`s then merge in deterministic
   barrier order (this is why `Messages` and `Inbox` are reducer components), or
@@ -171,7 +183,8 @@ order — allowed and deterministic, but sharp; prefer `add`.)
 ### Rejection preserves the work
 
 The critical property (R26/R30 amended): a staging rejection leaves **component state,
-dirt, the step counter, and the trace all at the step-start boundary**. Nothing tears,
+dirt, the step counter, the entity-id counter, and the trace all at the step-start
+boundary**. Nothing tears,
 and nothing is lost — re-running the world *reproduces the conflict* rather than
 silently dropping the pending pairs. From core's regression tests:
 

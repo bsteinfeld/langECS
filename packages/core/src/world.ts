@@ -668,6 +668,22 @@ class WorldImpl implements World {
       for (const [id, comps] of this.entities) {
         if (this.matchesQuery(sys.query, comps)) next.add(id);
       }
+      // Collect dirt for pairs that stopped matching (R35: `pendingPairs` is
+      // "dirt at this boundary"). Candidates are matched ∩ dirty, so dirt for an
+      // unmatched entity can never be consumed; for a pair that matched only
+      // through a `transient` component it is permanent snapshot garbage,
+      // because the component is excluded from the snapshot (R35) and never
+      // comes back on load. Dropping it keeps the continuation identical: an
+      // entity that comes to match again is marked `new-match` by R26.2 at that
+      // same boundary.
+      const dirtMap = this.dirt.get(sys.key);
+      if (dirtMap !== undefined) {
+        for (const id of [...dirtMap.keys()]) {
+          if (next.has(id)) continue;
+          dirtMap.delete(id);
+          this.markChanged();
+        }
+      }
       for (const id of next) {
         if (!prev.has(id)) {
           this.markDirt(sys.key, id, 'new-match');
@@ -714,7 +730,11 @@ class WorldImpl implements World {
       kind = 'merge';
     }
     comps.set(name, next);
-    changes.push({ record: { entity, component: name, kind, value: next }, writer });
+    // Detached copy (R41/R42 amended): `changes` becomes trace and `step:applied`
+    // data. The barrier's own `stageSet` already clones; this path (external
+    // writes and the cancellation stamp, R50) published a live reference to
+    // committed storage, so mutating a recorded value rewrote the world.
+    changes.push({ record: { entity, component: name, kind, value: deepClone(next) }, writer });
   }
 
   // ------------------------------------------------------------- registration
@@ -1020,9 +1040,35 @@ class WorldImpl implements World {
         emit({ type: 'run:end', status: result.status, steps: result.steps });
         stream.resolve(result);
       },
-      (err) => {
-        this.runInFlight = false;
+      async (err) => {
         this.forgetSettledPairs();
+        // A cancel that landed while this step was in flight must still be
+        // honoured (R50): `pendingCancel` is consumed at the top of the loop or
+        // after it, and a barrier rejection (R30) reaches neither — the next
+        // `run()` then resets it, so the cancellation evaporated and the work
+        // the operator stopped resumed. The run is over and the world is back at
+        // the step-start boundary, so this is now an ordinary idle stamp (R16),
+        // and it is persisted before the rejection surfaces so a reloaded world
+        // is still cancelled.
+        const late = this.pendingCancel;
+        if (late !== undefined) {
+          this.pendingCancel = undefined;
+          late.step = this.stepCount;
+          this.stampCancelled(late, 'external');
+          try {
+            await this.persist();
+          } catch (saveErr) {
+            // The run is already rejecting with its own error; an adapter
+            // failure here must not replace it. Reported, like an observer
+            // fault (R45) — the stamp is in committed state either way and
+            // reaches the store at the next save.
+            report('[langecs] persisting a late cancellation failed (ignored, R50):', saveErr);
+          }
+        }
+        // Only now is the world idle (R16): while the cancellation save was in
+        // flight `running` stayed true, so no external edit could slip in between
+        // the snapshot and its acknowledgement and be marked saved when it was not.
+        this.runInFlight = false;
         // A rejected run emits no run:end (R40); observers get the
         // observer-only run:reject instead (R45) so they can close out.
         this.notifyEvent({ type: 'run:reject', error: serializeError(err) }, runId);
@@ -1241,6 +1287,13 @@ class WorldImpl implements World {
           spawned: [],
           despawned: [],
           durationMs: 0,
+          // Nothing committed, so `stepCount` does not advance and this entry's
+          // `step` label is the step this iteration WOULD have been (R45's
+          // truthful label). A later run then commits a real step with that same
+          // number, and `getTrace()` holds two entries labelled alike; the flag
+          // is what tells them apart. Additive on purpose: existing consumers
+          // keep reading `step` exactly as before.
+          committed: false,
         });
         break;
       }
@@ -1248,6 +1301,9 @@ class WorldImpl implements World {
       // 4. Execute all eligible pairs concurrently. (Dirt for executed and
       // vetoed pairs is consumed only when the barrier commits, R26 amended.)
       steps += 1;
+      // `ctx.spawn` allocates ids eagerly (R29), so the counter has to be part
+      // of what a rejected barrier rolls back (R30 amended).
+      const entityIdAtStepStart = this.nextEntityId;
       emit({
         type: 'step:start',
         step: stepNo,
@@ -1261,7 +1317,19 @@ class WorldImpl implements World {
       // duplicate agent-system key): the run rejects with component state,
       // dirt, step counter, and trace ALL at the step-start boundary. Once
       // staging passes, the commit is unconditional.
-      const outcome = this.applyBarrier(execs, vetoed, stepNo);
+      let outcome: BarrierOutcome;
+      try {
+        outcome = this.applyBarrier(execs, vetoed, stepNo);
+      } catch (err) {
+        // A rejected barrier leaves component state, dirt, the step counter and
+        // the trace at the step-start boundary (R30 amended) — and the id
+        // counter with them, since it is committed state in every snapshot
+        // (R35). Without this the snapshot after a rejected run differed from
+        // the one before it, so "re-running reproduces the conflict" held for
+        // behavior but not for state.
+        this.nextEntityId = entityIdAtStepStart;
+        throw err;
+      }
       const durationMs = now() - stepStart;
       const changeRecords = outcome.changes.map((c) => c.record);
 
@@ -1392,9 +1460,12 @@ class WorldImpl implements World {
     const adapter = this.persistence;
     if (adapter === undefined) return;
     if (this.revision === this.savedRevision) return;
+    // The revision the SNAPSHOT describes, captured before the await: a change
+    // that lands while the adapter is writing must not be marked saved by it.
+    const revision = this.revision;
     const snapshot = this.snapshot();
     await adapter.save(snapshot);
-    this.savedRevision = this.revision;
+    this.savedRevision = revision;
   }
 
   // -------------------------------------------------------- pair execution
@@ -1546,6 +1617,9 @@ class WorldImpl implements World {
         return out as never;
       },
       entity: (id) => (this.entities.has(id) ? this.readOnlyView(id) : undefined),
+      // Read-only introspection for systems that hold system NAMES as data
+      // (R22 amended) — see `WorldReadView.systems`.
+      systems: () => this.systems(),
     };
   }
 
@@ -1702,30 +1776,91 @@ class WorldImpl implements World {
       }
     }
 
-    // Conflict prescan (R30): throw before committing anything.
-    const writers = new Map<
-      string,
-      { component: string; entity: number; pairs: Map<string, { system: string; entity: number }> }
-    >();
+    // Spawn shells: collected first so writes from ANY pair can target the
+    // eagerly allocated ids (R29), and so the conflict prescan below can tell a
+    // write to a live shell from one to an entity that does not exist (which is
+    // dropped and traced, never a conflict).
+    const shells = new Set<number>();
+    const spawned: number[] = [];
+    const spawnedBy: { entity: number; system: string; parent: number }[] = [];
     for (const exec of okExecs) {
-      const pair = pairId(exec.sys.key, exec.entity);
       for (const op of exec.ops) {
-        if (op.kind !== 'write' || op.component.reducer || despawnSet.has(op.entity)) continue;
-        const key = `${op.entity}|${op.component.componentName}`;
-        let entry = writers.get(key);
-        if (!entry) {
-          entry = { component: op.component.componentName, entity: op.entity, pairs: new Map() };
-          writers.set(key, entry);
-        }
-        entry.pairs.set(pair, { system: exec.sys.key, entity: exec.entity });
+        if (op.kind !== 'spawn') continue;
+        shells.add(op.entity);
+        spawned.push(op.entity);
+        spawnedBy.push({ entity: op.entity, system: exec.sys.key, parent: exec.entity });
       }
     }
-    for (const entry of writers.values()) {
-      if (entry.pairs.size > 1) {
-        throw new WriteConflictError(entry.component, entry.entity, stepNo, [
-          ...entry.pairs.values(),
-        ]);
+    const exists = (id: number): boolean => shells.has(id) || this.entities.has(id);
+
+    // Conflict prescan (R30 amended): throw before committing anything.
+    //
+    // Keyed by (entity, component) over EVERY op that decides that slot —
+    // a write (add/set), a `remove`, and the initial sets of a `ctx.spawn`.
+    // Two DIFFERENT pairs touching one slot is a conflict unless the whole group
+    // is either (a) writes to a component that has a reducer (the sanctioned
+    // merge), or (b) removes (idempotent, order-free). Same-pair combinations
+    // are never a conflict — R30 is about different pairs.
+    //
+    // Scanning only plain-component writes let set+remove, add+remove on a
+    // reducer component, and a spawn-time init racing a foreign write to the
+    // same shell commit in registration order: silent, order-dependent
+    // last-write-wins, which is exactly what R30 exists to make impossible.
+    const touched = new Map<
+      string,
+      {
+        component: string;
+        entity: number;
+        pairs: Map<string, { system: string; entity: number }>;
+        reducerWritesOnly: boolean;
+        removesOnly: boolean;
       }
+    >();
+    const touch = (
+      exec: PairExec,
+      entity: number,
+      component: ComponentType<any>,
+      kind: 'write' | 'remove' | 'spawn-init',
+    ): void => {
+      // Ops targeting a despawned or nonexistent entity are dropped during
+      // staging, so they can never conflict with anything.
+      if (despawnSet.has(entity) || !exists(entity)) return;
+      const name = componentNameOf(component);
+      const key = `${entity}|${name}`;
+      let entry = touched.get(key);
+      if (!entry) {
+        entry = {
+          component: name,
+          entity,
+          pairs: new Map(),
+          reducerWritesOnly: true,
+          removesOnly: true,
+        };
+        touched.set(key, entry);
+      }
+      entry.pairs.set(pairId(exec.sys.key, exec.entity), {
+        system: exec.sys.key,
+        entity: exec.entity,
+      });
+      if (kind !== 'write' || component.reducer === undefined) entry.reducerWritesOnly = false;
+      if (kind !== 'remove') entry.removesOnly = false;
+    };
+    for (const exec of okExecs) {
+      for (const op of exec.ops) {
+        if (op.kind === 'write') touch(exec, op.entity, op.component, 'write');
+        else if (op.kind === 'remove') touch(exec, op.entity, op.component, 'remove');
+        else if (op.kind === 'spawn') {
+          for (const item of flattenSpawnItems(op.items).sets) {
+            touch(exec, op.entity, item.component, 'spawn-init');
+          }
+        }
+      }
+    }
+    for (const entry of touched.values()) {
+      if (entry.pairs.size < 2 || entry.reducerWritesOnly || entry.removesOnly) continue;
+      throw new WriteConflictError(entry.component, entry.entity, stepNo, [
+        ...entry.pairs.values(),
+      ]);
     }
 
     // Invalidate prescan (R24): an unresolvable system name must reject the run
@@ -1736,8 +1871,6 @@ class WorldImpl implements World {
 
     // Staging overlay over committed storage: entity -> name -> staged entry.
     const overlay = new Map<number, Map<string, { present: boolean; value?: unknown }>>();
-    const shells = new Set<number>();
-    const exists = (id: number): boolean => shells.has(id) || this.entities.has(id);
     const stagedLookup = (id: number, name: string): { present: boolean; value?: unknown } => {
       const entry = overlay.get(id)?.get(name);
       if (entry) return entry;
@@ -1788,18 +1921,6 @@ class WorldImpl implements World {
         change: { record: { entity, component: name, kind: 'remove' }, writer },
       });
     };
-
-    // Spawn shells: collected first so writes from ANY pair can target eager ids.
-    const spawned: number[] = [];
-    const spawnedBy: { entity: number; system: string; parent: number }[] = [];
-    for (const exec of okExecs) {
-      for (const op of exec.ops) {
-        if (op.kind !== 'spawn') continue;
-        shells.add(op.entity);
-        spawned.push(op.entity);
-        spawnedBy.push({ entity: op.entity, system: exec.sys.key, parent: exec.entity });
-      }
-    }
 
     // Validate spawn-time agent registrations (DuplicateSystemError must reject
     // during staging, not mid-commit). Tracks intra-barrier keys too.
@@ -2237,13 +2358,16 @@ class WorldImpl implements World {
     }
     if (strict && missingSystems.size > 0) throw new UnknownSystemError([...missingSystems]);
 
-    // Wholesale replacement of the previous timeline — including the flight
-    // recorder (R36/R42 amended): a trace that mixed steps from two histories
-    // would lie about the loaded world. (Validation above runs first, so a
-    // failed load leaves the old trace intact.)
-    this.traceBuf = [];
-    this.entities = new Map();
-    this.preserved = new Map();
+    // STAGE. Everything is built into locals first and published in one go,
+    // exactly like the barrier's stage/commit split (R25/R30): a `deserialize`
+    // hook is user code and can throw, and wiping `this.*` up front left a
+    // half-loaded world behind — the old entities gone, the new ones partially
+    // in, `matched`/`dirt` still describing the previous timeline (so the next
+    // run scheduled pairs for entities that no longer existed), and
+    // `nextEntityId` unmoved, so a later spawn could overwrite a loaded id
+    // (R13). A failed load now leaves the world exactly as it was (R36).
+    const entities = new Map<number, Map<string, unknown>>();
+    const preserved = new Map<number, Record<string, unknown>>();
     for (const entity of [...migrated.entities].sort((a, b) => a.id - b.id)) {
       const comps = new Map<string, unknown>();
       for (const [name, raw] of Object.entries(entity.components)) {
@@ -2254,10 +2378,10 @@ class WorldImpl implements World {
           // it joins no query and generates no dirt, but it survives the next
           // snapshot, so a rolling deploy cannot delete a component the other
           // version still owns (R55).
-          let kept = this.preserved.get(entity.id);
+          let kept = preserved.get(entity.id);
           if (!kept) {
             kept = {};
-            this.preserved.set(entity.id, kept);
+            preserved.set(entity.id, kept);
           }
           kept[name] = detached;
           report.preserved.push({ entity: entity.id, component: name });
@@ -2273,11 +2397,19 @@ class WorldImpl implements World {
           comps.set(name, detached);
         }
       }
-      this.entities.set(entity.id, comps);
+      entities.set(entity.id, comps);
     }
-    this.stepCount = migrated.step;
-    this.nextEntityId = migrated.nextEntityId;
-    this.dirt = new Map();
+    // Match sets reflect the restored committed state; no dirt is generated so
+    // the loaded world continues identically from the boundary (R36).
+    const matched = new Map<string, Set<number>>();
+    for (const sys of this.systemList) {
+      const matchSet = new Set<number>();
+      for (const [id, comps] of entities) {
+        if (this.matchesQuery(sys.query, comps)) matchSet.add(id);
+      }
+      matched.set(sys.key, matchSet);
+    }
+    const dirt = new Map<string, Map<number, string>>();
     for (const pair of migrated.pendingPairs) {
       if (!this.systemsByKey.has(pair.system)) {
         // Unlike a component value there is nowhere to keep this: dirt names a
@@ -2286,18 +2418,42 @@ class WorldImpl implements World {
         report.droppedPairs.push({ ...pair } as PendingPair);
         continue;
       }
-      this.markDirt(pair.system, pair.entity, pair.reason);
-    }
-    // Match sets reflect the restored committed state; no dirt is generated so
-    // the loaded world continues identically from the boundary (R36).
-    this.matched = new Map();
-    for (const sys of this.systemList) {
-      const matchSet = new Set<number>();
-      for (const [id, comps] of this.entities) {
-        if (this.matchesQuery(sys.query, comps)) matchSet.add(id);
+      // Dirt whose entity does not match that system in the restored state can
+      // never be consumed — the scheduler only ever considers matched ∩ dirty —
+      // so restoring it would park a phantom pair in `pendingPairs` of every
+      // later snapshot (R35). A pair that cannot fire cannot change the
+      // continuation either (R36): if the entity comes to match again, R26.2
+      // marks it `new-match` at that boundary anyway. The common source is a
+      // `transient` component, which is excluded from the snapshot (R35) while
+      // the dirt it created is not.
+      if (matched.get(pair.system)?.has(pair.entity) !== true) {
+        report.droppedPairs.push({ ...pair } as PendingPair);
+        continue;
       }
-      this.matched.set(sys.key, matchSet);
+      let entityMap = dirt.get(pair.system);
+      if (!entityMap) {
+        entityMap = new Map();
+        dirt.set(pair.system, entityMap);
+      }
+      if (!entityMap.has(pair.entity)) entityMap.set(pair.entity, pair.reason);
     }
+
+    // COMMIT. Nothing below can throw. Wholesale replacement of the previous
+    // timeline — including the flight recorder (R36/R42 amended): a trace that
+    // mixed steps from two histories would lie about the loaded world.
+    this.traceBuf = [];
+    this.entities = entities;
+    this.preserved = preserved;
+    this.matched = matched;
+    this.dirt = dirt;
+    this.stepCount = migrated.step;
+    // Never below the highest restored id + 1 (R13): a hand-edited or corrupt
+    // snapshot whose counter lags its entities would otherwise hand out an id
+    // that is already taken, and the next spawn would silently overwrite it.
+    this.nextEntityId = Math.max(
+      migrated.nextEntityId,
+      migrated.entities.reduce((max, entity) => Math.max(max, entity.id), 0) + 1,
+    );
     // A just-loaded boundary needs no write until state or pending dirt changes.
     this.markChanged();
     this.savedRevision = this.revision;

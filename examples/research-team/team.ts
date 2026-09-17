@@ -18,7 +18,14 @@ import {
   type SystemCtx,
   type World,
 } from '@langecs/core';
-import { budgetWatchdog, extractJson, Goal, Phase, spendOf } from '@langecs/stdlib';
+import {
+  budgetWatchdog,
+  extractJson,
+  Goal,
+  Phase,
+  schemaValidator,
+  spendOf,
+} from '@langecs/stdlib';
 import {
   Answer,
   Approved,
@@ -38,7 +45,13 @@ import {
 
 /** The shared model, wrapped so each call's cost lands on the blackboard's
  * TokenUsage ledger — the data feed for the tokenBudget watchdog. Models that
- * report no usage (scriptedModel in tests) are estimated at ~4 chars/token. */
+ * report no usage (scriptedModel in tests) are estimated at ~4 chars/token.
+ *
+ * Best-effort accounting, by construction: the receipt is a buffered write in
+ * the CALLING pair, so it commits only if that pair does. A system that throws
+ * after its model call (R31) or a run the barrier rejects (R30) loses the
+ * receipt although the provider was paid. Authoritative billing belongs outside
+ * the transaction — `withCost` on the model resource, or a host-side ledger. */
 function meteredModel(ctx: SystemCtx, board: EntityTarget, system: string): Model {
   const inner = ctx.resource(ResearchModel);
   return {
@@ -140,6 +153,10 @@ export const planner = defineSystem({
         schema: PLAN_SCHEMA,
         schemaName: 'Plan',
       },
+      // Enforced, not just embedded as text: a reply shaped like `{}` used to
+      // pass `extractJson` and throw a TypeError at `.slice` below — a SystemError
+      // whose buffered TokenUsage receipt was discarded with the pair (R31).
+      schemaValidator(PLAN_SCHEMA),
     );
     const plan = subQuestions.slice(0, 4);
     for (const [index, text] of plan.entries()) {
@@ -190,6 +207,7 @@ export const critic = defineSystem({
         schema: REVIEW_SCHEMA,
         schemaName: 'Review',
       },
+      schemaValidator(REVIEW_SCHEMA),
     );
     // One revision round only: a finding that already came back revised
     // stands, however grumpy the critic — this bounds the cycle.

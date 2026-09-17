@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "langecs-playground": {
+      "command": "node",
+      "args": ["--import", "tsx", "examples/agent-playground/main.ts", "--allow-authoring"]
+    }
+  }
+}

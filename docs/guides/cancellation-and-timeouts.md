@@ -60,6 +60,11 @@ like any other commit — the pre-cancel snapshot keeps its own step, and time
 travel can still recover the uncancelled world. It shows up in the flight
 recorder as a step with no runs and the `Cancelled` writes in `applied`.
 
+If that step's barrier **rejects** instead (a write conflict, a throwing reducer), the
+cancel is still honoured: the run rejects with everything back at the step-start
+boundary, and the stamp is then applied there like an idle cancel and persisted — so a
+stop never evaporates just because the step it landed in turned out to be broken.
+
 ### The `Not(Cancelled)` convention
 
 Cancellation is **cooperative and opt-in at the query level**. Every stdlib

@@ -8,10 +8,10 @@ there are no edges: the agent loop emerges from data changing.
 
 This is an experiment in validating that mapping (see [DESIGN.md](../DESIGN.md) and
 [prior-art.md](./prior-art.md)). The [examples](../examples/) form a learning path:
-ten standalone examples plus six ports of LangGraph.js originals, each port with
+twelve standalone examples plus six ports of LangGraph.js originals, each port with
 an honest side-by-side comparison; the [patterns catalog](../examples/PATTERNS.md)
-names the recurring shapes. `langecs` is a working title — see
-[naming.md](./naming.md).
+names the recurring shapes. The name `langecs` was reviewed for a rename and kept —
+see [naming.md](./naming.md).
 
 This page walks you through building one ReAct agent end to end. It mirrors
 [`examples/react-agent`](../examples/react-agent/), which is the same program with
@@ -307,11 +307,12 @@ trace waterfall.
 
 ## Where next
 
-- [`examples/`](../examples/README.md) — sixteen runnable examples as a
+- [`examples/`](../examples/README.md) — eighteen runnable examples as a
   learning path. Start with **hello-world**, **order-pipeline**, and
   **tools-from-scratch** (an agent from raw parts → the engine as a no-LLM
   workflow runtime → the tool loop demystified), then the real-world workflows
-  (support-desk, content-pipeline, code-review-crew, rag-qa, context-window),
+  (support-desk, content-pipeline, code-review-crew, rag-qa, context-window,
+  cancellation),
   the multi-agent patterns (research-team, supervisor, reflection), and finally
   the six LangGraph.js ports with their honest verdicts. The
   [patterns catalog](../examples/PATTERNS.md) names the shapes they share.

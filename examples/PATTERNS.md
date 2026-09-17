@@ -21,6 +21,8 @@ no special engine support. Links point to the canonical example for each.
 | **Bounded memory** | Keep long context under budget | `withMessageWindow` trims what each model call sees; durable history stays on the entity | [context-window](context-window/) |
 | **Stop button / deadline** | Halt work already in flight | `world.cancel()` stamps `Cancelled`, so the stop is a `Not(Cancelled)` query term; `ctx.signal` aborts the open call; `timeoutMs` bounds a pair that would otherwise hang the barrier | [cancellation](cancellation/) |
 | **Time travel / fork** | Inspect or branch history | per-step snapshots via a `PersistenceAdapter`; `loadStep` rewinds, `load` into a fresh world forks | [time-travel](time-travel/) |
+| **Operate from outside** | An agent (or a human) drives a live world through a protocol | the §14 observer surface + public `World` API behind bounded tools: one scoped edit per call with a revision token, run handles that never fake a terminal status, `explain` from retained evidence, forks built fresh from the recipe | [agent-playground](agent-playground/) |
+| **Behavior as data** *(experimental)* | Add a system without shipping code | a `PromptSystemDecl`: query + allowed writes + prompt; the model proposes, the declaration validates, ordinary buffered writes apply; `ProposalRejected` state instead of throws, `maxRuns` as the brake, a host-owned ledger for cost | [agent-playground](agent-playground/) (`--allow-authoring`) |
 
 ## How they compose
 

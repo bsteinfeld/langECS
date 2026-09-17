@@ -62,8 +62,8 @@ directly — no build step needed for dev.
   `@opentelemetry/api`, GenAI semconv for model/tool spans
 - `packages/devtools` — inspector GUI: Node server (WS + OTLP/HTTP JSON receiver at
   `/v1/traces`) + React UI (`ui/`, built to `dist/ui` via Vite); idle-only mutation (R16)
-- `examples/` — the six v1-gating LangGraph ports; `examples/_shared/env.ts` loads
-  `.env.local`
+- `examples/` — eighteen runnable examples: the six v1-gating LangGraph ports plus
+  twelve standalone patterns; `examples/_shared/env.ts` loads `.env.local`
 
 ## Secrets
 

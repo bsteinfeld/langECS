@@ -3,6 +3,7 @@ import type { ComponentInit, ComponentType, QueryTerm, TagType } from './compone
 import { isComponentType } from './component';
 import { LangECSError } from './errors';
 import type { EventRef } from './event';
+import type { SystemInfo } from './observe';
 import type { ResourceRef } from './resource';
 
 /** Value type carried by a component type. */
@@ -69,6 +70,17 @@ export type EntityTarget = number | { readonly id: number };
 export interface WorldReadView {
   query<const Q extends readonly QueryTerm[]>(...terms: Q): EntityReadView<Q>[];
   entity(id: number): EntityReadView | undefined;
+  /**
+   * The systems registered on this world right now (R22 amended) — the same
+   * list as `world.systems()`, read-only and safe mid-step.
+   *
+   * A system that reads a system NAME out of component data (stdlib `retry`
+   * reads `ErrorRecord.system`) needs this: `ctx.invalidate(e, name)` rejects
+   * the whole run when the name resolves to nothing (R24), and a snapshot
+   * written before a system was renamed or removed carries exactly such names.
+   * Check against `key`/`name` here before invalidating.
+   */
+  systems(): SystemInfo[];
 }
 
 /**

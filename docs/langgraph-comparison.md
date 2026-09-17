@@ -261,7 +261,8 @@ loops, so in practice the limit only guards *intentional* cycles.
   written down. LangECS is a validate-by-porting experiment.
 - **Hosted platform.** LangGraph Platform / Studio give deployment, a debugger UI,
   and managed persistence out of the box. LangECS has an in-memory adapter, a
-  filesystem adapter, and a planned inspector.
+  filesystem adapter, and a local visual inspector ([`@langecs/devtools`](../packages/devtools));
+  it has no hosted deployment and no managed persistence.
 - **Mid-node `interrupt()`.** Pausing at an arbitrary line inside a node — with
   resume — is genuinely more ergonomic for linear approval flows than restructuring
   into ask/handle system pairs, idempotency caveat notwithstanding.
